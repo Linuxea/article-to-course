@@ -4,11 +4,13 @@ export const fixtureCourse: Course = {
   title: '什么是 HTTPS？',
   subtitle: '用 5 分钟搞懂浏览器和服务器之间的安全对话',
   accent: 'teal',
+  objectives: ['说清 HTTP 和 HTTPS 的区别', '理解 TLS 握手在做什么', '记住加密、身份、完整性三大保障'],
   sections: [
     {
       id: 'intro',
       title: '先看一个生活比喻',
       subtitle: '为什么我们需要加密',
+      takeaways: ['HTTP 像明信片，内容人人可见', 'HTTPS 像密封信，只有收件人能打开'],
       screens: [
         {
           heading: '寄明信片 vs 密封信',
@@ -107,6 +109,24 @@ export const fixtureCourse: Course = {
                 { title: '加密', body: '让中间人看不懂传输的内容。', icon: '🔒' },
                 { title: '身份验证', body: '证书保证你没连到假冒服务器。', icon: '🪪' },
                 { title: '完整性', body: '内容被篡改会被立刻发现。', icon: '✅' },
+              ],
+            },
+            {
+              type: 'table',
+              caption: 'HTTP 与 HTTPS 对比',
+              columns: ['维度', 'HTTP', 'HTTPS'],
+              rows: [
+                ['内容可见性', '明文，人人可读', '加密，中间人看不懂'],
+                ['身份验证', '无', '数字证书背书'],
+                ['默认端口', '80', '443'],
+              ],
+            },
+            {
+              type: 'arch',
+              nodes: [
+                { id: 'browser', label: '浏览器', icon: '🖥️', desc: '发起请求的一方，负责验证证书、加密和解密数据。' },
+                { id: 'tls', label: 'TLS 加密层', icon: '🔐', desc: '夹在中间的保镖，把明文变成乱码再传输。' },
+                { id: 'server', label: '服务器', icon: '🗄️', desc: '持有证书和私钥，证明身份后接收加密请求。' },
               ],
             },
             {

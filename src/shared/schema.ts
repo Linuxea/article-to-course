@@ -85,7 +85,36 @@ export const StepsBlockSchema = z.object({
   items: z.array(z.object({ title: z.string(), body: z.string() })).min(1),
 })
 
-export const BlockSchema = z.discriminatedUnion('type', [
+export const TableBlockSchema = z
+  .object({
+    type: z.literal('table'),
+    caption: z.string().optional(),
+    columns: z.array(z.string()).min(2),
+    rows: z.array(z.array(z.string())).min(1),
+  })
+  .superRefine((t, ctx) => {
+    t.rows.forEach((row, i) => {
+      if (row.length !== t.columns.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `row ${i} has ${row.length} cells but table has ${t.columns.length} columns`,
+        })
+      }
+    })
+  })
+
+export const ArchNodeSchema = z.object({
+  id: z.string().min(1),
+  label: z.string(),
+  icon: z.string().optional(),
+  desc: z.string(),
+})
+export const ArchBlockSchema = z.object({
+  type: z.literal('arch'),
+  nodes: z.array(ArchNodeSchema).min(2),
+})
+
+export const BlockSchema = z.union([
   ParagraphBlockSchema,
   CalloutBlockSchema,
   TranslationBlockSchema,
@@ -94,6 +123,8 @@ export const BlockSchema = z.discriminatedUnion('type', [
   FlowBlockSchema,
   KeypointsBlockSchema,
   StepsBlockSchema,
+  TableBlockSchema,
+  ArchBlockSchema,
 ])
 export type Block = z.infer<typeof BlockSchema>
 
@@ -108,6 +139,7 @@ export const SectionSchema = z.object({
   id: z.string(),
   title: z.string(),
   subtitle: z.string().optional(),
+  takeaways: z.array(z.string()).min(1).optional(),
   screens: z.array(ScreenSchema).min(1),
 })
 export type Section = z.infer<typeof SectionSchema>
@@ -116,6 +148,7 @@ export const CourseSchema = z.object({
   title: z.string(),
   subtitle: z.string().optional(),
   accent: AccentSchema.default('vermillion'),
+  objectives: z.array(z.string()).min(1).optional(),
   sections: z.array(SectionSchema).min(1),
 })
 export type Course = z.infer<typeof CourseSchema>

@@ -74,4 +74,50 @@ describe('CourseSchema', () => {
     }
     expect(() => CourseSchema.parse(bad)).toThrow()
   })
+
+  it('rejects a table whose row length differs from columns', () => {
+    const bad = {
+      title: 'T',
+      sections: [
+        {
+          id: 's',
+          title: 'S',
+          screens: [
+            { blocks: [{ type: 'table', columns: ['a', 'b'], rows: [['1', '2'], ['3']] }] },
+          ],
+        },
+      ],
+    }
+    expect(() => CourseSchema.parse(bad)).toThrow()
+  })
+
+  it('accepts a well-formed table and rejects arch with fewer than 2 nodes', () => {
+    const good = {
+      title: 'T',
+      sections: [
+        {
+          id: 's',
+          title: 'S',
+          screens: [
+            { blocks: [{ type: 'table', columns: ['a', 'b'], rows: [['1', '2'], ['3', '4']] }] },
+          ],
+        },
+      ],
+    }
+    expect(CourseSchema.parse(good)).toBeTruthy()
+
+    const bad = {
+      title: 'T',
+      sections: [
+        {
+          id: 's',
+          title: 'S',
+          screens: [
+            { blocks: [{ type: 'arch', nodes: [{ id: 'x', label: 'X', desc: 'd' }] }] },
+          ],
+        },
+      ],
+    }
+    expect(() => CourseSchema.parse(bad)).toThrow()
+  })
 })

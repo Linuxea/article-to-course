@@ -9,9 +9,10 @@ import {
   type Outline,
   type OutlineSection,
 } from './prompts'
-import { CourseSchema, type Course, type Section, type Screen } from '../shared/schema'
+import { CourseSchema, type Course, type Section } from '../shared/schema'
 import { renderCourse } from './render'
 import { loadAssets } from './assets'
+import type { SectionDetail } from './prompts'
 
 export type GenEvent =
   | { type: 'outline' }
@@ -65,20 +66,24 @@ async function callOutline(article: string): Promise<Outline> {
   return OutlineSchema.parse(raw)
 }
 
-async function callSection(article: string, section: OutlineSection, outline: Outline): Promise<Screen[]> {
+async function callSection(article: string, section: OutlineSection, outline: Outline): Promise<SectionDetail> {
   const firstRaw = await chatJson<unknown>(buildSectionMessages(article, section, outline))
   const first = SectionDetailSchema.safeParse(firstRaw)
-  if (first.success) return first.data.screens
+  if (first.success) return first.data
 
   // one repair attempt feeding the error back
   const repairedRaw = await chatJson<unknown>(
     buildSectionRepairMessages(article, section, outline, first.error.message, JSON.stringify(firstRaw)),
   )
   const repaired = SectionDetailSchema.safeParse(repairedRaw)
-  if (repaired.success) return repaired.data.screens
+  if (repaired.success) return repaired.data
 
   // degrade gracefully: a single paragraph noting the section couldn't be fully generated
-  return [{ heading: section.title, blocks: [{ type: 'paragraph', segments: [{ type: 'text', text: section.focus }] }] }]
+  return {
+    screens: [
+      { heading: section.title, blocks: [{ type: 'paragraph', segments: [{ type: 'text', text: section.focus }] }] },
+    ],
+  }
 }
 
 /* ── Public entry: an async generator of GenEvent ──────────── */
@@ -100,10 +105,10 @@ export async function* generate(article: string): AsyncGenerator<GenEvent> {
       const sections: Section[] = new Array(total)
       let completed = 0
       await runPool(outline.sections, config.concurrency, async (s: OutlineSection, i: number) => {
-        const screens = config.mock
+        const detail = config.mock
           ? mockSectionScreens(clean, i, total)
           : await callSection(clean, s, outline)
-        sections[i] = { id: s.id, title: s.title, subtitle: s.subtitle, screens }
+        sections[i] = { id: s.id, title: s.title, subtitle: s.subtitle, takeaways: detail.takeaways, screens: detail.screens }
         completed++
         q.push({ type: 'section', index: completed, total, title: s.title })
       })
@@ -113,6 +118,7 @@ export async function* generate(article: string): AsyncGenerator<GenEvent> {
         title: outline.title,
         subtitle: outline.subtitle,
         accent: outline.accent,
+        objectives: outline.objectives,
         sections,
       }
       const validated = CourseSchema.parse(course)
@@ -148,6 +154,7 @@ function mockOutline(article: string): Outline {
     title: `${title}…（mock）`,
     subtitle: '当前为本地 mock 模式，未调用真实 LLM',
     accent: 'coral',
+    objectives: ['说清文章的核心概念', '理解其运作流程', '记住最关键的要点'],
     sections: [
       { id: 'intro', title: '先了解一下', subtitle: '导入', focus: '用比喻引入主题' },
       { id: 'main', title: '核心讲解', subtitle: '展开', focus: '讲解文章主要内容' },
@@ -156,27 +163,47 @@ function mockOutline(article: string): Outline {
   }
 }
 
-function mockSectionScreens(article: string, i: number, total: number): Screen[] {
+function mockSectionScreens(article: string, i: number, total: number): SectionDetail {
   const paras = splitParagraphs(article)
   const chunk = paras.slice(
     Math.floor((i * paras.length) / total),
     Math.floor(((i + 1) * paras.length) / total),
   )
   const text = chunk.join(' ') || article.slice(0, 200)
-  const screens: Screen[] = [
-    {
-      blocks: [
-        {
-          type: 'paragraph',
-          segments: [
-            { type: 'text', text: '（mock）' + (text.length > 160 ? text.slice(0, 160) + '…' : text) },
-          ],
-        },
-      ],
-    },
-  ]
+  const detail: SectionDetail = {
+    screens: [
+      {
+        blocks: [
+          {
+            type: 'paragraph',
+            segments: [
+              { type: 'text', text: '（mock）' },
+              { type: 'term', text: '核心概念', definition: 'mock 模式下的占位术语，开启真实 LLM 后会自动替换。' },
+              { type: 'text', text: '：' + (text.length > 160 ? text.slice(0, 160) + '…' : text) },
+            ],
+          },
+          {
+            type: 'callout',
+            variant: 'info',
+            title: 'mock 提示',
+            body: '这是本地 mock 生成的占位内容，配置 LLM_API_KEY 后将由模型生成完整课程。',
+          },
+          {
+            type: 'table',
+            caption: 'mock 对比表',
+            columns: ['维度', '说明'],
+            rows: [
+              ['内容来源', '直接截取原文片段'],
+              ['交互元素', '仅占位'],
+            ],
+          },
+        ],
+      },
+    ],
+    takeaways: ['这是 mock 小结：配置 API key 后体验完整生成效果。'],
+  }
   if (i === total - 1) {
-    screens[0]!.blocks.push({
+    detail.screens[0]!.blocks.push({
       type: 'quiz',
       question: '（mock 测验）这是一个占位问题，开启真实 LLM 后会自动生成。',
       options: [
@@ -188,5 +215,5 @@ function mockSectionScreens(article: string, i: number, total: number): Screen[]
       explanationWrong: 'mock 错误引导。',
     })
   }
-  return screens
+  return detail
 }

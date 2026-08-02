@@ -54,7 +54,9 @@ export function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <span className="brand">📝 文章 → 可交互课程</span>
+        <span className="brand">
+          <span className="brand-mark">✦</span> 文章 → 交互课程
+        </span>
         <span className="status-pill">
           {info ? (info.mock ? 'mock 模式' : info.model) : '…'}
         </span>

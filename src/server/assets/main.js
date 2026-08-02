@@ -1,498 +1,331 @@
-/**
- * CODEBASE-TO-COURSE — COMPLETE JS ENGINE
- * Copy this file verbatim into the course output directory.
- * Never regenerate it. It handles all interactivity generically.
- *
- * Engines included:
- *  - Navigation & progress bar
- *  - Scroll-triggered reveal animations
- *  - Keyboard navigation
- *  - Glossary tooltips
- *  - Quiz (multiple-choice & scenario)
- *  - Drag-and-drop matching
- *  - Group chat animation
- *  - Data flow / message flow animation
- *  - Architecture diagram
- *  - "Spot the bug" challenge
- *  - Layer toggle
- */
-(function () {
-  'use strict';
+/* ARTICLE-TO-COURSE — interaction engine.
+   Class/data-* driven, event delegation, no globals required by markup. */
+;(function () {
+  'use strict'
 
-  /* ── HELPERS ──────────────────────────────────────────────── */
-  function $(sel, ctx) { return (ctx || document).querySelector(sel); }
-  function $$(sel, ctx) { return Array.from((ctx || document).querySelectorAll(sel)); }
-
-  /* ── NAVIGATION & PROGRESS BAR ────────────────────────────── */
-  const progressBar = $('#progress-bar');
-  const navDots     = $$('.nav-dot');
-  const modules     = $$('.module');
-
+  /* ── scroll progress bar ───────────────────────────────── */
+  var progressBar = document.getElementById('progressBar')
   function updateProgress() {
-    if (!progressBar) return;
-    const scrollTop    = window.scrollY;
-    const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
-    const pct          = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
-    progressBar.style.width = pct + '%';
-    progressBar.setAttribute('aria-valuenow', Math.round(pct));
-    updateNavDots();
+    if (!progressBar) return
+    var doc = document.documentElement
+    var max = doc.scrollHeight - window.innerHeight
+    var pct = max > 0 ? Math.min(100, (window.scrollY / max) * 100) : 100
+    progressBar.style.width = pct + '%'
+    progressBar.setAttribute('aria-valuenow', String(Math.round(pct)))
+  }
+  window.addEventListener('scroll', updateProgress, { passive: true })
+  updateProgress()
+
+  /* ── reveal on scroll ──────────────────────────────────── */
+  var revealIO = new IntersectionObserver(
+    function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) {
+          en.target.classList.add('in')
+          revealIO.unobserve(en.target)
+        }
+      })
+    },
+    { threshold: 0.08, rootMargin: '0px 0px -4% 0px' },
+  )
+  document.querySelectorAll('.reveal').forEach(function (el) {
+    revealIO.observe(el)
+  })
+
+  /* ── toc active chapter ────────────────────────────────── */
+  var tocLinks = Array.prototype.slice.call(document.querySelectorAll('.toc-link'))
+  var chapters = Array.prototype.slice.call(document.querySelectorAll('.chapter'))
+  if (tocLinks.length && chapters.length) {
+    var tocIO = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (en) {
+          if (!en.isIntersecting) return
+          var id = en.target.id
+          tocLinks.forEach(function (l) {
+            l.classList.toggle('active', l.getAttribute('data-chapter') === id)
+          })
+        })
+      },
+      { rootMargin: '-25% 0px -65% 0px' },
+    )
+    chapters.forEach(function (c) {
+      tocIO.observe(c)
+    })
   }
 
-  function updateNavDots() {
-    const scrollMid = window.scrollY + window.innerHeight / 2;
-    modules.forEach((mod, i) => {
-      const dot = navDots[i];
-      if (!dot) return;
-      const top    = mod.offsetTop;
-      const bottom = top + mod.offsetHeight;
-      if (scrollMid >= top && scrollMid < bottom) {
-        dot.classList.add('active');
-        dot.classList.remove('visited');
-      } else if (window.scrollY + window.innerHeight > top) {
-        dot.classList.remove('active');
-        dot.classList.add('visited');
-      } else {
-        dot.classList.remove('active', 'visited');
-      }
-    });
-  }
+  /* ── keyboard chapter navigation ───────────────────────── */
+  document.addEventListener('keydown', function (e) {
+    var t = e.target
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
+    var idx = -1
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') idx = 1
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') idx = -1
+    else return
+    if (!chapters.length) return
+    var mid = window.scrollY + window.innerHeight * 0.3
+    var current = 0
+    chapters.forEach(function (c, i) {
+      if (c.offsetTop <= mid) current = i
+    })
+    var next = Math.min(chapters.length - 1, Math.max(0, current + idx))
+    chapters[next].scrollIntoView({ behavior: 'smooth', block: 'start' })
+    e.preventDefault()
+  })
 
-  window.addEventListener('scroll', () => requestAnimationFrame(updateProgress), { passive: true });
-  updateProgress();
-
-  // Nav dot click → scroll to module
-  navDots.forEach(dot => {
-    dot.addEventListener('click', () => {
-      const target = $('#' + dot.dataset.target);
-      if (target) target.scrollIntoView({ behavior: 'smooth' });
-    });
-  });
-
-  /* ── KEYBOARD NAVIGATION ───────────────────────────────────── */
-  function currentModuleIndex() {
-    const scrollMid = window.scrollY + window.innerHeight / 2;
-    for (let i = 0; i < modules.length; i++) {
-      const top    = modules[i].offsetTop;
-      const bottom = top + modules[i].offsetHeight;
-      if (scrollMid >= top && scrollMid < bottom) return i;
+  /* ── glossary term tooltips ────────────────────────────── */
+  var tooltip = null
+  function getTooltip() {
+    if (!tooltip) {
+      tooltip = document.createElement('div')
+      tooltip.className = 'term-tooltip'
+      document.body.appendChild(tooltip)
     }
-    return 0;
+    return tooltip
   }
-
-  document.addEventListener('keydown', e => {
-    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
-    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-      const next = modules[currentModuleIndex() + 1];
-      if (next) { next.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); }
+  function showTerm(term) {
+    var def = term.getAttribute('data-definition')
+    if (!def) return
+    var tip = getTooltip()
+    tip.textContent = def
+    tip.classList.add('show')
+    var r = term.getBoundingClientRect()
+    var tipW = Math.min(300, window.innerWidth - 32)
+    tip.style.maxWidth = tipW + 'px'
+    var x = r.left + window.scrollX
+    var y = r.bottom + window.scrollY + 8
+    tip.style.left = '0px'
+    tip.style.top = '0px'
+    tip.classList.remove('flip')
+    var tr = tip.getBoundingClientRect()
+    var w = tr.width
+    var h = tr.height
+    x = Math.max(12 + window.scrollX, Math.min(x, window.scrollX + window.innerWidth - w - 12))
+    var flip = r.bottom + 8 + h > window.innerHeight && r.top - 8 - h > 0
+    if (flip) {
+      y = r.top + window.scrollY - h - 8
+      tip.classList.add('flip')
     }
-    if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-      const prev = modules[currentModuleIndex() - 1];
-      if (prev) { prev.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); }
-    }
-  });
-
-  /* ── SCROLL-TRIGGERED REVEAL ───────────────────────────────── */
-  const revealObserver = new IntersectionObserver(entries => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('visible');
-        revealObserver.unobserve(entry.target);
-      }
-    });
-  }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
-
-  $$('.animate-in').forEach(el => revealObserver.observe(el));
-
-  // Stagger children
-  $$('.stagger-children').forEach(parent => {
-    Array.from(parent.children).forEach((child, i) => {
-      child.style.setProperty('--stagger-index', i);
-    });
-  });
-
-  /* ── GLOSSARY TOOLTIPS ─────────────────────────────────────── */
-  let activeTooltip = null;
-
-  function positionTooltip(term, tip) {
-    const rect     = term.getBoundingClientRect();
-    const tipWidth = Math.min(320, Math.max(200, window.innerWidth * 0.8));
-    let left = rect.left + rect.width / 2 - tipWidth / 2;
-    left = Math.max(8, Math.min(left, window.innerWidth - tipWidth - 8));
-    tip.style.left  = left + 'px';
-    tip.style.width = tipWidth + 'px';
-    document.body.appendChild(tip);
-    const tipHeight = tip.offsetHeight;
-    if (rect.top - tipHeight - 12 < 0) {
-      tip.style.top = (rect.bottom + 8) + 'px';
-      tip.classList.add('flip');
-    } else {
-      tip.style.top = (rect.top - tipHeight - 8) + 'px';
-      tip.classList.remove('flip');
-    }
+    tip.style.left = x + 'px'
+    tip.style.top = y + 'px'
+    var arrowX = Math.max(12, r.left + window.scrollX + r.width / 2 - x - 5)
+    tip.style.setProperty('--arrow-x', arrowX + 'px')
   }
+  function hideTerm() {
+    if (tooltip) tooltip.classList.remove('show')
+  }
+  document.addEventListener('mouseover', function (e) {
+    var term = e.target.closest ? e.target.closest('.term') : null
+    if (term) showTerm(term)
+  })
+  document.addEventListener('mouseout', function (e) {
+    if (e.target.closest && e.target.closest('.term')) hideTerm()
+  })
+  document.addEventListener('click', function (e) {
+    var term = e.target.closest ? e.target.closest('.term') : null
+    if (term) showTerm(term)
+    else hideTerm()
+  })
+  window.addEventListener('scroll', hideTerm, { passive: true })
 
-  function showTooltip(term, tip) {
-    if (activeTooltip && activeTooltip !== tip) {
-      activeTooltip.classList.remove('visible');
-      activeTooltip.remove();
+  /* ── quiz ──────────────────────────────────────────────── */
+  function setFeedback(q, cls, text) {
+    var fb = q.querySelector('.quiz-fb')
+    fb.className = 'quiz-fb show ' + cls
+    fb.textContent = text
+  }
+  document.addEventListener('click', function (e) {
+    var opt = e.target.closest ? e.target.closest('.quiz-opt') : null
+    if (opt && !opt.disabled) {
+      var quiz = opt.closest('.quiz')
+      quiz.querySelectorAll('.quiz-opt').forEach(function (o) {
+        o.classList.remove('selected')
+      })
+      opt.classList.add('selected')
+      return
     }
-    positionTooltip(term, tip);
-    requestAnimationFrame(() => tip.classList.add('visible'));
-    activeTooltip = tip;
-  }
-
-  function hideTooltip(tip) {
-    tip.classList.remove('visible');
-    setTimeout(() => { if (!tip.classList.contains('visible')) tip.remove(); }, 150);
-    if (activeTooltip === tip) activeTooltip = null;
-  }
-
-  $$('.term').forEach(term => {
-    const tip = document.createElement('span');
-    tip.className = 'term-tooltip';
-    tip.textContent = term.dataset.definition;
-
-    term.addEventListener('mouseenter', () => showTooltip(term, tip));
-    term.addEventListener('mouseleave', () => hideTooltip(tip));
-    term.addEventListener('click', e => {
-      e.stopPropagation();
-      tip.classList.contains('visible') ? hideTooltip(tip) : showTooltip(term, tip);
-    });
-  });
-
-  document.addEventListener('click', () => {
-    if (activeTooltip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); activeTooltip = null; }
-  });
-
-  /* ── QUIZ ENGINE ───────────────────────────────────────────── */
-  window.selectOption = function (btn) {
-    const block = btn.closest('.quiz-question-block');
-    $$('.quiz-option', block).forEach(o => o.classList.remove('selected'));
-    btn.classList.add('selected');
-  };
-
-  window.checkQuiz = function (containerId) {
-    const container = $('#' + containerId);
-    if (!container) return;
-    $$('.quiz-question-block', container).forEach(q => {
-      const selected  = $('.quiz-option.selected', q);
-      const feedback  = $('.quiz-feedback', q);
-      const correct   = q.dataset.correct;
-      const rightExp  = q.dataset.explanationRight  || '';
-      const wrongExp  = q.dataset.explanationWrong  || '';
-
+    var check = e.target.closest ? e.target.closest('.quiz-check') : null
+    if (check) {
+      var q = check.closest('.quiz')
+      var selected = q.querySelector('.quiz-opt.selected')
       if (!selected) {
-        feedback.textContent = 'Pick an answer first!';
-        feedback.className = 'quiz-feedback show warning';
-        return;
+        setFeedback(q, 'warn', '先选择一个答案，再检查。')
+        return
       }
-      $$('.quiz-option', q).forEach(o => o.disabled = true);
+      var correct = q.getAttribute('data-correct')
+      var right = selected.getAttribute('data-value') === correct
+      q.querySelectorAll('.quiz-opt').forEach(function (o) {
+        o.disabled = true
+        if (o.getAttribute('data-value') === correct) o.classList.add('correct')
+      })
+      if (!right) selected.classList.add('incorrect')
+      selected.classList.remove('selected')
+      setFeedback(q, right ? 'success' : 'error', right ? '✔ 回答正确！' + q.getAttribute('data-right') : '✘ 还差一点。' + q.getAttribute('data-wrong'))
+      check.hidden = true
+      q.querySelector('.quiz-reset').hidden = false
+      return
+    }
+    var reset = e.target.closest ? e.target.closest('.quiz-reset') : null
+    if (reset) {
+      var q2 = reset.closest('.quiz')
+      q2.querySelectorAll('.quiz-opt').forEach(function (o) {
+        o.disabled = false
+        o.classList.remove('selected', 'correct', 'incorrect')
+      })
+      var fb = q2.querySelector('.quiz-fb')
+      fb.className = 'quiz-fb'
+      fb.textContent = ''
+      reset.hidden = true
+      q2.querySelector('.quiz-check').hidden = false
+    }
+  })
 
-      if (selected.dataset.value === correct) {
-        selected.classList.add('correct');
-        feedback.innerHTML = '<strong>Exactly!</strong> ' + rightExp;
-        feedback.className = 'quiz-feedback show success';
-      } else {
-        selected.classList.add('incorrect');
-        const correctBtn = $(`.quiz-option[data-value="${correct}"]`, q);
-        if (correctBtn) correctBtn.classList.add('correct');
-        feedback.innerHTML = '<strong>Not quite.</strong> ' + wrongExp;
-        feedback.className = 'quiz-feedback show error';
-      }
-    });
-  };
-
-  window.resetQuiz = function (containerId) {
-    const container = $('#' + containerId);
-    if (!container) return;
-    $$('.quiz-option', container).forEach(o => {
-      o.classList.remove('selected', 'correct', 'incorrect');
-      o.disabled = false;
-    });
-    $$('.quiz-feedback', container).forEach(f => { f.className = 'quiz-feedback'; f.textContent = ''; });
-  };
-
-  /* ── DRAG-AND-DROP ENGINE ──────────────────────────────────── */
-  function initDnD(containerEl) {
-    if (!containerEl) return;
-    const chips = $$('.dnd-chip', containerEl);
-    const zones = $$('.dnd-zone', containerEl);
-
-    // Mouse (HTML5 Drag API)
-    chips.forEach(chip => {
-      chip.addEventListener('dragstart', e => {
-        e.dataTransfer.setData('text/plain', chip.dataset.answer);
-        chip.classList.add('dragging');
-      });
-      chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
-    });
-
-    zones.forEach(zone => {
-      const target = $('.dnd-zone-target', zone);
-      if (!target) return;
-      target.addEventListener('dragover',  e => { e.preventDefault(); target.classList.add('drag-over'); });
-      target.addEventListener('dragleave', ()  => target.classList.remove('drag-over'));
-      target.addEventListener('drop', e => {
-        e.preventDefault();
-        target.classList.remove('drag-over');
-        const answer = e.dataTransfer.getData('text/plain');
-        const chip   = $(`.dnd-chip[data-answer="${answer}"]`, containerEl);
-        if (!chip) return;
-        target.textContent    = chip.textContent;
-        target.dataset.placed = answer;
-        chip.classList.add('placed');
-      });
-    });
-
-    // Touch
-    chips.forEach(chip => {
-      chip.addEventListener('touchstart', e => {
-        e.preventDefault();
-        const touch = e.touches[0];
-        const ghost = chip.cloneNode(true);
-        ghost.classList.add('touch-ghost');
-        ghost.style.cssText = `position:fixed;z-index:9999;pointer-events:none;left:${touch.clientX - 40}px;top:${touch.clientY - 20}px;`;
-        document.body.appendChild(ghost);
-        chip._ghost  = ghost;
-        chip._answer = chip.dataset.answer;
-      }, { passive: false });
-
-      chip.addEventListener('touchmove', e => {
-        e.preventDefault();
-        const touch = e.touches[0];
-        if (chip._ghost) {
-          chip._ghost.style.left = (touch.clientX - 40) + 'px';
-          chip._ghost.style.top  = (touch.clientY - 20) + 'px';
-        }
-        zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
-        const el = document.elementFromPoint(touch.clientX, touch.clientY);
-        const zt = el && el.closest('.dnd-zone-target');
-        if (zt) zt.classList.add('drag-over');
-      }, { passive: false });
-
-      chip.addEventListener('touchend', e => {
-        if (chip._ghost) { chip._ghost.remove(); chip._ghost = null; }
-        const touch = e.changedTouches[0];
-        const el    = document.elementFromPoint(touch.clientX, touch.clientY);
-        const zt    = el && el.closest('.dnd-zone-target');
-        if (zt) {
-          zt.textContent    = chip.textContent;
-          zt.dataset.placed = chip._answer;
-          chip.classList.add('placed');
-        }
-        zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
-      });
-    });
+  /* ── chat ──────────────────────────────────────────────── */
+  function chatState(win) {
+    return {
+      msgs: Array.prototype.slice.call(win.querySelectorAll('.chat-msg')),
+      typing: win.querySelector('.chat-typing'),
+      next: win.querySelector('.chat-next'),
+      all: win.querySelector('.chat-all'),
+      replay: win.querySelector('.chat-replay'),
+      count: win.querySelector('.chat-count'),
+      body: win.querySelector('.chat-body'),
+    }
   }
-
-  window.checkDnD = function (containerId) {
-    const container = $('#' + containerId);
-    if (!container) return;
-    $$('.dnd-zone', container).forEach(zone => {
-      const target  = $('.dnd-zone-target', zone);
-      if (!target || !target.dataset.placed) return;
-      if (target.dataset.placed === zone.dataset.correct) {
-        target.classList.add('correct-placed');
-      } else {
-        target.classList.add('incorrect-placed');
-      }
-    });
-  };
-
-  window.resetDnD = function (containerId) {
-    const container = $('#' + containerId);
-    if (!container) return;
-    $$('.dnd-zone-target', container).forEach(t => {
-      t.textContent = 'Drop here';
-      delete t.dataset.placed;
-      t.classList.remove('correct-placed', 'incorrect-placed');
-    });
-    $$('.dnd-chip', container).forEach(c => c.classList.remove('placed', 'dragging'));
-  };
-
-  // Auto-init all dnd containers
-  $$('.dnd-container').forEach(el => initDnD(el));
-
-  /* ── GROUP CHAT ENGINE ─────────────────────────────────────── */
-  function initChat(containerEl) {
-    if (!containerEl) return;
-    const messages    = $$('.chat-message', containerEl);
-    const typingEl    = $('.chat-typing', containerEl);
-    const typingAvEl  = $('#' + containerEl.id + '-typing-avatar') || $('.chat-avatar', typingEl);
-    const progressEl  = $('.chat-progress', containerEl);
-    let index = 0;
-
-    // Build actor map from messages
-    const actors = {};
-    messages.forEach(msg => {
-      const sender = msg.dataset.sender;
-      const avatar = $('.chat-avatar', msg);
-      if (avatar && !actors[sender]) {
-        actors[sender] = { initial: avatar.textContent.trim(), style: avatar.style.background };
-      }
-    });
-
-    function updateProgress() {
-      if (progressEl) progressEl.textContent = index + ' / ' + messages.length + ' messages';
-    }
-
-    function showNext() {
-      if (index >= messages.length) return;
-      const msg    = messages[index];
-      const sender = msg.dataset.sender;
-
-      if (typingEl && actors[sender]) {
-        if (typingAvEl) {
-          typingAvEl.textContent       = actors[sender].initial;
-          typingAvEl.style.background  = actors[sender].style;
-        }
-        typingEl.style.display = 'flex';
-      }
-
-      setTimeout(() => {
-        if (typingEl) typingEl.style.display = 'none';
-        msg.style.display = 'flex';
-        msg.style.animation = 'fadeSlideUp 0.3s var(--ease-out)';
-        index++;
-        updateProgress();
-      }, 800);
-    }
-
-    function showAll() {
-      const iv = setInterval(() => {
-        if (index >= messages.length) { clearInterval(iv); return; }
-        showNext();
-      }, 1200);
-    }
-
-    function reset() {
-      index = 0;
-      messages.forEach(m => { m.style.display = 'none'; m.style.animation = ''; });
-      if (typingEl) typingEl.style.display = 'none';
-      updateProgress();
-    }
-
-    // Bind controls
-    const nextBtn  = $('.chat-next-btn',  containerEl);
-    const allBtn   = $('.chat-all-btn',   containerEl);
-    const resetBtn = $('.chat-reset-btn', containerEl);
-    if (nextBtn)  nextBtn.addEventListener('click',  showNext);
-    if (allBtn)   allBtn.addEventListener('click',   showAll);
-    if (resetBtn) resetBtn.addEventListener('click', reset);
-
-    updateProgress();
+  function chatShown(st) {
+    return st.msgs.filter(function (m) {
+      return !m.hidden
+    }).length
   }
-
-  $$('.chat-window').forEach(el => initChat(el));
-
-  /* ── FLOW ANIMATION ENGINE ─────────────────────────────────── */
-  function initFlow(containerEl) {
-    if (!containerEl) return;
-    const stepsData  = JSON.parse(containerEl.dataset.steps || '[]');
-    const labelEl    = $('.flow-step-label', containerEl);
-    const progressEl = $('.flow-progress',   containerEl);
-    const packet     = $('.flow-packet',     containerEl);
-    let step = 0;
-
-    function updateProgress() {
-      if (progressEl) progressEl.textContent = 'Step ' + step + ' / ' + stepsData.length;
-    }
-
-    function animatePacket(fromId, toId) {
-      if (!packet) return;
-      const fromEl = $('#' + fromId);
-      const toEl   = $('#' + toId);
-      if (!fromEl || !toEl) return;
-      const fromR = fromEl.getBoundingClientRect();
-      const toR   = toEl.getBoundingClientRect();
-      const contR = containerEl.getBoundingClientRect();
-      const fx = fromR.left + fromR.width / 2  - contR.left;
-      const fy = fromR.top  + fromR.height / 2 - contR.top;
-      const tx = toR.left   + toR.width / 2    - contR.left;
-      const ty = toR.top    + toR.height / 2   - contR.top;
-      packet.style.setProperty('--packet-from-x', fx + 'px');
-      packet.style.setProperty('--packet-from-y', fy + 'px');
-      packet.style.setProperty('--packet-to-x',   tx + 'px');
-      packet.style.setProperty('--packet-to-y',   ty + 'px');
-      packet.style.display    = 'block';
-      packet.style.animation  = 'none';
-      packet.offsetHeight; // reflow
-      packet.style.animation  = 'packetMove 0.8s var(--ease-in-out) forwards';
-      setTimeout(() => { packet.style.display = 'none'; }, 850);
-    }
-
-    function next() {
-      if (step >= stepsData.length) return;
-      const s = stepsData[step];
-      $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
-      if (s.highlight) {
-        const hEl = $('#' + s.highlight, containerEl) || $('#flow-' + s.highlight);
-        if (hEl) hEl.classList.add('active');
-      }
-      if (s.packet && s.from && s.to) animatePacket('flow-' + s.from, 'flow-' + s.to);
-      if (labelEl) labelEl.textContent = s.label || '';
-      step++;
-      updateProgress();
-    }
-
-    function reset() {
-      step = 0;
-      $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
-      if (labelEl) labelEl.textContent = 'Click "Next Step" to begin';
-      if (packet)  packet.style.display = 'none';
-      updateProgress();
-    }
-
-    const nextBtn  = $('.flow-next-btn',  containerEl);
-    const resetBtn = $('.flow-reset-btn', containerEl);
-    if (nextBtn)  nextBtn.addEventListener('click',  next);
-    if (resetBtn) resetBtn.addEventListener('click', reset);
-
-    updateProgress();
+  function chatUpdate(st) {
+    var shown = chatShown(st)
+    st.count.textContent = shown + ' / ' + st.msgs.length
+    var done = shown >= st.msgs.length
+    st.next.hidden = done
+    st.all.hidden = done
+    st.replay.hidden = !done
   }
-
-  $$('.flow-animation').forEach(el => initFlow(el));
-
-  /* ── ARCHITECTURE DIAGRAM ──────────────────────────────────── */
-  $$('.arch-component').forEach(comp => {
-    comp.addEventListener('click', function () {
-      const diagram = this.closest('.arch-diagram');
-      $$('.arch-component', diagram).forEach(c => c.classList.remove('active'));
-      this.classList.add('active');
-      const descEl = $('.arch-description', diagram);
-      if (descEl) descEl.textContent = this.dataset.desc || '';
-    });
-  });
-
-  /* ── BUG CHALLENGE ─────────────────────────────────────────── */
-  window.checkBugLine = function (el, isCorrect) {
-    const challenge = el.closest('.bug-challenge');
-    const feedback  = $('.bug-feedback', challenge);
-    if (isCorrect) {
-      el.classList.add('correct');
-      feedback.innerHTML  = '<strong>Found it!</strong> ' + (el.dataset.explanation || '');
-      feedback.className  = 'bug-feedback show success';
-      $$('.bug-line', challenge).forEach(l => l.style.pointerEvents = 'none');
+  function chatRevealOne(st) {
+    var nextMsg = st.msgs.find(function (m) {
+      return m.hidden
+    })
+    if (!nextMsg) return
+    var who = nextMsg.getAttribute('data-who') || ''
+    st.typing.querySelector('.chat-ava').textContent = who.slice(0, 1) || '?'
+    st.typing.hidden = false
+    st.body.scrollTop = st.body.scrollHeight
+    setTimeout(function () {
+      st.typing.hidden = true
+      nextMsg.hidden = false
+      chatUpdate(st)
+      st.body.scrollTop = st.body.scrollHeight
+    }, 480)
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.chat-next, .chat-all, .chat-replay') : null
+    if (!btn) return
+    var st = chatState(btn.closest('.chat'))
+    if (btn.classList.contains('chat-next')) {
+      chatRevealOne(st)
+    } else if (btn.classList.contains('chat-all')) {
+      st.typing.hidden = true
+      st.msgs.forEach(function (m) {
+        m.hidden = false
+      })
+      chatUpdate(st)
+      st.body.scrollTop = st.body.scrollHeight
     } else {
-      el.classList.add('incorrect');
-      feedback.innerHTML  = (el.dataset.hint || 'Not this line — keep looking...');
-      feedback.className  = 'bug-feedback show error';
-      setTimeout(() => {
-        el.classList.remove('incorrect');
-        feedback.className = 'bug-feedback';
-      }, 1800);
+      st.msgs.forEach(function (m) {
+        m.hidden = true
+      })
+      st.typing.hidden = true
+      chatUpdate(st)
     }
-  };
+  })
+  document.querySelectorAll('.chat').forEach(function (win) {
+    chatUpdate(chatState(win))
+  })
 
-  /* ── LAYER TOGGLE ──────────────────────────────────────────── */
-  window.showLayer = function (layerId, btn) {
-    const demo = btn ? btn.closest('.layer-demo') : null;
-    if (!demo) return;
-    $$('.layer', demo).forEach(l => l.style.display = 'none');
-    $$('.layer-tab', demo).forEach(t => t.classList.remove('active'));
-    const layer = $('#' + layerId);
-    if (layer) layer.style.display = 'block';
-    btn.classList.add('active');
-  };
+  /* ── flow ──────────────────────────────────────────────── */
+  function actorCenter(flow, id) {
+    var wrap = flow.querySelector('.flow-actors')
+    var actor = wrap.querySelector('[data-actor="' + id + '"]')
+    if (!actor) return 0
+    return actor.offsetLeft + actor.offsetWidth / 2
+  }
+  function flowState(flow) {
+    return {
+      steps: JSON.parse(flow.getAttribute('data-steps') || '[]'),
+      idx: 0,
+      packet: flow.querySelector('.flow-packet'),
+      label: flow.querySelector('.flow-label'),
+      next: flow.querySelector('.flow-next'),
+      replay: flow.querySelector('.flow-replay'),
+      count: flow.querySelector('.flow-count'),
+    }
+  }
+  function flowStep(flow, st) {
+    var step = st.steps[st.idx]
+    if (!step) return
+    flow.querySelectorAll('.flow-actor').forEach(function (a) {
+      a.classList.toggle('active', a.getAttribute('data-actor') === step.from)
+    })
+    st.label.classList.remove('done')
+    st.label.textContent = step.label
+    if (step.packet) {
+      var fromX = actorCenter(flow, step.from) - 7
+      var toX = actorCenter(flow, step.to) - 7
+      st.packet.hidden = false
+      st.packet.style.transition = 'none'
+      st.packet.style.transform = 'translateX(' + fromX + 'px)'
+      void st.packet.offsetWidth
+      st.packet.style.transition = ''
+      st.packet.style.transform = 'translateX(' + toX + 'px)'
+    } else {
+      st.packet.hidden = true
+    }
+    st.idx++
+    st.count.textContent = '步骤 ' + st.idx + ' / ' + st.steps.length
+    if (st.idx >= st.steps.length) {
+      st.next.hidden = true
+      st.replay.hidden = false
+      setTimeout(function () {
+        flow.querySelectorAll('.flow-actor').forEach(function (a) {
+          a.classList.remove('active')
+        })
+        st.label.textContent = '🎉 演示完成 — ' + step.label
+        st.label.classList.add('done')
+      }, 800)
+    }
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.flow-next, .flow-replay') : null
+    if (!btn) return
+    var flow = btn.closest('.flow')
+    var st = flowState(flow)
+    if (btn.classList.contains('flow-replay')) {
+      flow.querySelectorAll('.flow-actor').forEach(function (a) {
+        a.classList.remove('active')
+      })
+      st.packet.hidden = true
+      st.label.classList.remove('done')
+      st.label.textContent = '点击「下一步」开始演示'
+      st.count.textContent = ''
+      btn.hidden = true
+      st.next.hidden = false
+      return
+    }
+    flowStep(flow, st)
+  })
 
-})();
+  /* ── arch diagram ──────────────────────────────────────── */
+  document.addEventListener('click', function (e) {
+    var node = e.target.closest ? e.target.closest('.arch-node') : null
+    if (!node) return
+    var arch = node.closest('.arch')
+    arch.querySelectorAll('.arch-node').forEach(function (n) {
+      n.classList.toggle('active', n === node)
+    })
+    arch.querySelector('.arch-detail-title').textContent = node.getAttribute('data-label')
+    arch.querySelector('.arch-detail-desc').textContent = node.getAttribute('data-desc')
+  })
+})()
