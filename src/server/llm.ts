@@ -18,6 +18,7 @@ export function generateObjectOptions() {
   return {
     model,
     temperature: 0.7,
+    maxOutputTokens: config.maxOutputTokens,
     maxRetries: config.maxRetries,
     abortSignal: AbortSignal.timeout(config.requestTimeoutMs),
   }

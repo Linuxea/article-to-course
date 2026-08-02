@@ -60,27 +60,44 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/**
+ * One application-level retry for "successful HTTP call but empty/invalid object"
+ * failures (NoObjectGeneratedError), which maxRetries inside the SDK does not cover.
+ */
+async function twice<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    console.warn(`[generate] ${label} failed, retrying once: ${errMsg(e).split('\n')[0]}`)
+    return await fn()
+  }
+}
+
 /* ── LLM calls (schema-validated via generateObject) ──────── */
 async function callOutline(article: string): Promise<Outline> {
   const { instructions, prompt } = buildOutlinePrompt(article)
-  const { object } = await generateObject({
-    ...generateObjectOptions(),
-    schema: OutlineSchema,
-    instructions,
-    prompt,
-  })
+  const { object } = await twice('outline', () =>
+    generateObject({
+      ...generateObjectOptions(),
+      schema: OutlineSchema,
+      instructions,
+      prompt,
+    }),
+  )
   return object
 }
 
 async function callSection(article: string, section: OutlineSection, outline: Outline): Promise<SectionDetail> {
   try {
     const { instructions, prompt } = buildSectionPrompt(article, section, outline)
-    const { object } = await generateObject({
-      ...generateObjectOptions(),
-      schema: SectionDetailSchema,
-      instructions,
-      prompt,
-    })
+    const { object } = await twice(`section "${section.title}"`, () =>
+      generateObject({
+        ...generateObjectOptions(),
+        schema: SectionDetailSchema,
+        instructions,
+        prompt,
+      }),
+    )
     return object
   } catch (e) {
     // degrade gracefully: keep the course usable, but log the real reason server-side
