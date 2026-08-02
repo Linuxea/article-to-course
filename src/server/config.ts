@@ -21,8 +21,6 @@ export const config = {
   llmBaseUrl: process.env.LLM_BASE_URL ?? 'https://api.openai.com/v1',
   llmApiKey: process.env.LLM_API_KEY ?? '',
   llmModel: process.env.LLM_MODEL ?? 'deepseek-v4-flash',
-  /** When true, send response_format json_object and instruct JSON-only output. */
-  jsonMode: bool('LLM_JSON_MODE', true),
   /** When true (or when no API key is set), generate from a local mock instead of calling an LLM. */
   mock: bool('LLM_MOCK', false) || (process.env.LLM_API_KEY ?? '').length === 0,
   concurrency: num('CONCURRENCY', 3),

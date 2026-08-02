@@ -1,11 +1,11 @@
+import { generateObject } from 'ai'
 import { config } from './config'
-import { chatJson } from './llm'
+import { generateObjectOptions } from './llm'
 import {
   OutlineSchema,
   SectionDetailSchema,
-  buildOutlineMessages,
-  buildSectionMessages,
-  buildSectionRepairMessages,
+  buildOutlinePrompt,
+  buildSectionPrompt,
   type Outline,
   type OutlineSection,
 } from './prompts'
@@ -60,29 +60,35 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-/* ── LLM calls (with one Zod-repair retry for sections) ─────── */
+/* ── LLM calls (schema-validated via generateObject) ──────── */
 async function callOutline(article: string): Promise<Outline> {
-  const raw = await chatJson<unknown>(buildOutlineMessages(article))
-  return OutlineSchema.parse(raw)
+  const { instructions, prompt } = buildOutlinePrompt(article)
+  const { object } = await generateObject({
+    ...generateObjectOptions(),
+    schema: OutlineSchema,
+    instructions,
+    prompt,
+  })
+  return object
 }
 
 async function callSection(article: string, section: OutlineSection, outline: Outline): Promise<SectionDetail> {
-  const firstRaw = await chatJson<unknown>(buildSectionMessages(article, section, outline))
-  const first = SectionDetailSchema.safeParse(firstRaw)
-  if (first.success) return first.data
-
-  // one repair attempt feeding the error back
-  const repairedRaw = await chatJson<unknown>(
-    buildSectionRepairMessages(article, section, outline, first.error.message, JSON.stringify(firstRaw)),
-  )
-  const repaired = SectionDetailSchema.safeParse(repairedRaw)
-  if (repaired.success) return repaired.data
-
-  // degrade gracefully: a single paragraph noting the section couldn't be fully generated
-  return {
-    screens: [
-      { heading: section.title, blocks: [{ type: 'paragraph', segments: [{ type: 'text', text: section.focus }] }] },
-    ],
+  try {
+    const { instructions, prompt } = buildSectionPrompt(article, section, outline)
+    const { object } = await generateObject({
+      ...generateObjectOptions(),
+      schema: SectionDetailSchema,
+      instructions,
+      prompt,
+    })
+    return object
+  } catch {
+    // degrade gracefully: a single paragraph noting the section couldn't be fully generated
+    return {
+      screens: [
+        { heading: section.title, blocks: [{ type: 'paragraph', segments: [{ type: 'text', text: section.focus }] }] },
+      ],
+    }
   }
 }
 

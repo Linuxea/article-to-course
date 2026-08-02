@@ -1,12 +1,11 @@
 import { z } from 'zod'
-import type { ChatMessage } from './llm'
 
 /* ── Block catalog the model is allowed to emit ──────────── */
 export const BLOCK_CATALOG = `你只能使用以下 block 类型（每个对象都有固定的 "type" 字段）：
 
 1. paragraph — 正文段落，支持内联术语解释。
    { "type":"paragraph", "segments":[ {"type":"text","text":"..."} , {"type":"term","text":"术语","definition":"1-2 句通俗解释"} ] }
-   规则：专业术语在每节第一次出现时必须用 term 包裹；每段 2-4 句。
+   规则：专业术语在每节第一次出现时必须用 term 包裹；每段 3-6 句，逐步展开一个观点、给出例子或推理过程（而非只甩结论）；一节里鼓励堆叠多个 paragraph 形成连贯讲解。
 
 2. callout — "为什么重要"提示框。
    { "type":"callout", "variant":"accent"|"info"|"warning", "title":"可选标题", "body":"内容" }
@@ -31,7 +30,7 @@ export const BLOCK_CATALOG = `你只能使用以下 block 类型（每个对象�
    from / to 是 actor 的序号（从 1 开始）；3-6 步为宜。
 
 7. keypoints — 要点卡片网格（总结/清单）。
-   { "type":"keypoints", "items":[{"title":"标题","body":"一句话","icon":"可选emoji"}] }
+   { "type":"keypoints", "items":[{"title":"标题","body":"1-2 句，点明要点及其意义","icon":"可选emoji"}] }
 
 8. steps — 编号步骤卡片。
    { "type":"steps", "items":[{"title":"标题","body":"描述"}] }
@@ -70,8 +69,15 @@ export const SectionDetailSchema = z.object({
 export type SectionDetail = z.infer<typeof SectionDetailSchema>
 
 /* ── Prompt builders ─────────────────────────────────────── */
-export function buildOutlineMessages(article: string): ChatMessage[] {
-  const system = `你是一位资深教学内容设计师。你的任务是把一篇【文章】重新组织成一个【可视化、可交互、有教育意义】的网页课程的大纲。
+export interface PromptParts {
+  /** System-level instructions (passed to generateObject as `instructions`). */
+  instructions: string
+  /** The user prompt (passed to generateObject as `prompt`). */
+  prompt: string
+}
+
+export function buildOutlinePrompt(article: string): PromptParts {
+  const instructions = `你是一位资深教学内容设计师。你的任务是把一篇【文章】重新组织成一个【可视化、可交互、有教育意义】的网页课程的大纲。
 请使用与原文相同的语言输出。
 只输出一个 JSON 对象，不要输出 markdown 代码块、不要任何解释文字。
 JSON 结构：
@@ -90,20 +96,17 @@ JSON 结构：
 - 第一个 section 用生活化比喻引入；最后一个 section 适合放测验(keypoints/quiz)巩固。
 - focus 要具体，说明这节重点和推荐的交互方式（quiz/chat/flow/translation/table/arch 等）。`
 
-  const user = `【文章】\n${article}\n\n请输出大纲 JSON。`
-  return [
-    { role: 'system', content: system },
-    { role: 'user', content: user },
-  ]
+  const prompt = `【文章】\n${article}\n\n请输出大纲 JSON。`
+  return { instructions, prompt }
 }
 
-export function buildSectionMessages(
+export function buildSectionPrompt(
   article: string,
   section: OutlineSection,
   outline: Outline,
-): ChatMessage[] {
+): PromptParts {
   const sectionTitles = outline.sections.map((s) => `- ${s.title}`).join('\n')
-  const system = `你正在和别人合作把一篇文章做成一节【可视化、可交互、有教育意义】的网页课程。你只负责写其中【一节】的内容。
+  const instructions = `你正在和别人合作把一篇文章做成一节【可视化、可交互、有教育意义】的网页课程。你只负责写其中【一节】的内容。
 整门课的大纲：
 ${sectionTitles}
 
@@ -114,38 +117,16 @@ ${sectionTitles}
 输出要求：
 - 使用与原文相同的语言。
 - 只输出一个 JSON 对象：{ "screens": [ { "heading": "可选的小标题", "blocks": [ ... ] } ], "takeaways": ["本节小结 1", "小结 2"] }
-- 产出 2 到 4 个 screen；每个 screen 放 2 到 5 个 block，内容要充实、覆盖 focus 里的所有要点。
+- 产出 2 到 4 个 screen；每个 screen 放 3 到 6 个 block，内容要充实、覆盖 focus 里的所有要点。
 - 这一节里至少出现一个【交互】元素（quiz / chat / flow / arch 之一），其余可用 paragraph / callout / translation / keypoints / steps / table。
 - 涉及多方对比、优缺点、参数差异时，优先用 table；涉及系统组成、模块职责时，优先用 arch。
-- 用大白话，每段 2-4 句；专业术语第一次出现时必须用 paragraph 的 term 包裹并给 1-2 句通俗定义。
+- 用大白话，每段 3-6 句，把概念讲透、给出例子或推理过程（而不是只给结论）；专业术语第一次出现时必须用 paragraph 的 term 包裹并给 1-2 句通俗定义。
 - 不要照抄原文，要重新组织、降低阅读门槛；translation 的 original 可摘录原文关键句。
-- takeaways 写 1 到 3 条，每条一句话概括本节最值得记住的点。
+- takeaways 写 1 到 3 条，每条 1-2 句概括本节最值得记住的点。
 - 只输出 JSON，不要 markdown 代码块或解释。
 
 ${BLOCK_CATALOG}`
 
-  const user = `【完整文章】\n${article}\n\n请为这一节输出 JSON：{ "screens": [...], "takeaways": [...] }`
-  return [
-    { role: 'system', content: system },
-    { role: 'user', content: user },
-  ]
-}
-
-/** Second-attempt prompt that feeds back a validation error to the model. */
-export function buildSectionRepairMessages(
-  article: string,
-  section: OutlineSection,
-  outline: Outline,
-  errorMessage: string,
-  badOutput: string,
-): ChatMessage[] {
-  const base = buildSectionMessages(article, section, outline)
-  return [
-    ...base,
-    { role: 'assistant', content: badOutput },
-    {
-      role: 'user',
-      content: `上一次输出的 JSON 校验失败：${errorMessage}\n请修正后只重新输出符合 schema 的 JSON 对象。`,
-    },
-  ]
+  const prompt = `【完整文章】\n${article}\n\n请为这一节输出 JSON：{ "screens": [...], "takeaways": [...] }`
+  return { instructions, prompt }
 }

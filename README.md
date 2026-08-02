@@ -33,7 +33,6 @@ npm start       # 单进程：托管 dist/ + 提供 /api（http://localhost:3000
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容的 base URL（DeepSeek / OpenAI / Ollama / vLLM 等） |
 | `LLM_API_KEY` | （空） | 留空则自动进入 mock 模式 |
 | `LLM_MODEL` | `deepseek-v4-flash` | 模型名 |
-| `LLM_JSON_MODE` | `true` | 是否用 `response_format: json_object`（部分 provider 不支持时关掉） |
 | `LLM_MOCK` | `false` | 强制 mock（无 API key 时也会自动开启） |
 | `CONCURRENCY` | `3` | 并发生成多少个 section |
 | `PORT` | `3000` | 服务端口 |
@@ -44,8 +43,8 @@ npm start       # 单进程：托管 dist/ + 提供 /api（http://localhost:3000
 粘贴文章 ─▶ POST /api/generate (SSE)
           │
           ├─ 1) LLM 生成大纲（标题 / 主题色 / 3–6 节 + 每节 focus）
-          ├─ 2) 并发为每节生成结构化 JSON（screen + blocks）
-          ├─ 3) Zod 校验（失败回灌重试 1 次，再失败降级为段落）
+           ├─ 2) 并发为每节生成结构化 JSON（screen + blocks）
+           ├─ 3) Vercel AI SDK `generateObject` + Zod schema 校验（内置重试，失败降级为段落）
           └─ 4) renderCourse() 把 JSON 映射成既定 class 名的 HTML，内联 styles.css + main.js
                 ─▶ 预览(iframe srcdoc) 与 导出(Blob 下载) 共用同一段 HTML，零差异
 ```
@@ -59,7 +58,7 @@ npm start       # 单进程：托管 dist/ + 提供 /api（http://localhost:3000
 - `src/shared/schema.ts` — Zod Course Schema（前后端共享契约）
 - `src/server/render.ts` — Course → 自包含 HTML
 - `src/server/generate.ts` — 大纲 + 并发分节编排（SSE 事件流）
-- `src/server/llm.ts` — OpenAI 兼容客户端（JSON mode + 重试退避）
+- `src/server/llm.ts` — Vercel AI SDK 模型封装（OpenAI 兼容 provider，超时 + 重试）
 - `src/server/prompts.ts` — 大纲/分节提示词与输出 schema
 - `src/server/assets/{styles.css,main.js}` — 复用的设计系统（零依赖，内联进输出）
 - `src/client/` — React 前端（粘贴 / 进度 / 预览 / 导出）
