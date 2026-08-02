@@ -5,24 +5,32 @@ export type GenEvent =
   | { type: 'done'; html: string }
   | { type: 'error'; message: string }
 
-export async function streamGenerate(article: string, onEvent: (ev: GenEvent) => void): Promise<void> {
+export async function streamGenerate(article: string, onEvent: (ev: GenEvent) => void, signal?: AbortSignal): Promise<void> {
   const res = await fetch('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ article }),
+    signal,
   })
   if (!res.ok || !res.body) {
-    throw new Error(`请求失败 (HTTP ${res.status})`)
+    // Surface the server's own message (e.g. "文章太短…" / "文章过长…") when present.
+    let message = `请求失败 (HTTP ${res.status})`
+    try {
+      const body = (await res.json()) as { error?: unknown }
+      if (typeof body.error === 'string') message = body.error
+    } catch {
+      // keep the generic message
+    }
+    throw new Error(message)
   }
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   let terminated = false
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+
+  const process = (chunk: string): void => {
+    buffer += chunk
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
     for (const raw of lines) {
@@ -41,8 +49,15 @@ export async function streamGenerate(article: string, onEvent: (ev: GenEvent) =>
         // ignore malformed keep-alive lines
       }
     }
-    if (terminated) return
   }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    process(decoder.decode(value, { stream: true }))
+  }
+  // Flush any trailing partial multibyte sequence so the final 'done' event isn't lost.
+  process(decoder.decode())
   if (!terminated) {
     throw new Error('生成中断：连接提前关闭，请重试。')
   }

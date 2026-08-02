@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { config } from './config'
 
 /* ── Block catalog the model is allowed to emit ──────────── */
 export const BLOCK_CATALOG = `你只能使用以下 block 类型（每个对象都有固定的 "type" 字段）：
@@ -59,9 +60,11 @@ export const OutlineSectionSchema = z.object({
 export const OutlineSchema = z.object({
   title: z.string(),
   subtitle: z.string().optional(),
-  accent: z.enum(['vermillion', 'coral', 'teal', 'amber', 'forest']),
-  objectives: z.array(z.string()).min(3).max(5),
-  sections: z.array(OutlineSectionSchema).min(4).max(7),
+  // Defaults/lower bounds intentionally match CourseSchema so a slightly-off model
+  // response doesn't fail the whole course at the outline stage.
+  accent: z.enum(['vermillion', 'coral', 'teal', 'amber', 'forest']).default('vermillion'),
+  objectives: z.array(z.string()).min(1).max(8),
+  sections: z.array(OutlineSectionSchema).min(1).max(10),
 })
 export type Outline = z.infer<typeof OutlineSchema>
 export type OutlineSection = z.infer<typeof OutlineSectionSchema>
@@ -80,6 +83,15 @@ export interface PromptParts {
   instructions: string
   /** The user prompt (passed to generateObject as `prompt`). */
   prompt: string
+}
+
+/** Cap the article so a single section call can't blow the model's context window. */
+function capArticle(article: string): string {
+  const max = config.maxArticleChars
+  if (article.length <= max) return article
+  const head = Math.floor(max * 0.7)
+  const tail = max - head
+  return `${article.slice(0, head)}\n\n…（原文较长，已省略中段约 ${article.length - max} 字）…\n\n${article.slice(article.length - tail)}`
 }
 
 export function buildOutlinePrompt(article: string): PromptParts {
@@ -102,7 +114,7 @@ JSON 结构：
 - 第一个 section 用恰当的比喻或实例引入；最后一个 section 适合放测验(keypoints/quiz)巩固。
 - focus 要具体，说明这节重点；若适合用 quiz/chat/flow/translation/table/arch 等交互元素可一并推荐，但默认应以连贯 paragraph 展开为主。`
 
-  const prompt = `【文章】\n${article}\n\n请输出大纲 JSON。`
+  const prompt = `【文章】\n${capArticle(article)}\n\n请输出大纲 JSON。`
   return { instructions, prompt }
 }
 
@@ -134,6 +146,6 @@ ${sectionTitles}
 
 ${BLOCK_CATALOG}`
 
-  const prompt = `【完整文章】\n${article}\n\n请为这一节输出 JSON：{ "screens": [...], "takeaways": [...] }`
+  const prompt = `【完整文章】\n${capArticle(article)}\n\n请为这一节输出 JSON：{ "screens": [...], "takeaways": [...] }`
   return { instructions, prompt }
 }

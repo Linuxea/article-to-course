@@ -10,12 +10,10 @@ HTTPS 的出现解决了这个问题。它在 HTTP 外面套了一层叫 TLS 的
 
 export function InputForm({
   initial,
-  busy,
   info,
   onSubmit,
 }: {
   initial: string
-  busy: boolean
   info: { mock: boolean; model: string } | null
   onSubmit: (text: string) => void
 }) {
@@ -34,7 +32,7 @@ export function InputForm({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && text.trim() && !busy) onSubmit(text)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && text.trim()) onSubmit(text)
           }}
           autoFocus
         />
@@ -50,8 +48,8 @@ export function InputForm({
         <span className="hint">
           <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 生成
         </span>
-        <button className="primary-btn" disabled={busy || !text.trim()} onClick={() => onSubmit(text)}>
-          {busy ? '生成中…' : '生成课程 →'}
+        <button className="primary-btn" disabled={!text.trim()} onClick={() => onSubmit(text)}>
+          生成课程 →
         </button>
       </div>
     </div>

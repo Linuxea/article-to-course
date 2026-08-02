@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
 
 export function PreviewFrame({ html }: { html: string }) {
-  // Keyed by html length so React remounts on a new generation (fresh scroll state).
+  // srcDoc updates reload the iframe on their own, so no remount key is needed.
   return (
     <iframe
       title="预览"
       className="preview-frame"
       srcDoc={html}
       sandbox="allow-scripts allow-same-origin allow-popups"
-      key={html.length}
     />
   )
 }

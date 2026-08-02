@@ -1,5 +1,5 @@
 import { generateObject, generateText } from 'ai'
-import type { ZodType, ZodTypeDef } from 'zod'
+import { ZodError, type ZodType, type ZodTypeDef } from 'zod'
 import { config } from './config'
 import { generateObjectOptions } from './llm'
 import {
@@ -44,11 +44,11 @@ class AsyncQueue<T> {
   }
 }
 
-async function runPool<T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+async function runPool<T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>, signal?: AbortSignal): Promise<void> {
   let cursor = 0
   const size = Math.min(limit, items.length)
   const runners = Array.from({ length: size }, async () => {
-    while (true) {
+    while (!signal?.aborted) {
       const i = cursor++
       if (i >= items.length) return
       await worker(items[i]!, i)
@@ -59,6 +59,15 @@ async function runPool<T>(items: T[], limit: number, worker: (item: T, index: nu
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
+}
+
+/** True for AbortError / DOMException naming variants produced by fetch + ai SDK. */
+function isAbortError(e: unknown): boolean {
+  if (e instanceof Error) {
+    const n = e.name
+    if (n === 'AbortError' || n === 'TimeoutError') return true
+  }
+  return false
 }
 
 /** Tolerate markdown fences / surrounding prose when parsing model output by hand. */
@@ -84,19 +93,21 @@ export function parseJsonLenient(text: string): unknown {
  * generateText sends no response_format, so retrying through it dodges that quirk;
  * the result is still validated against the same Zod schema.
  */
-async function generateJson<T>(label: string, schema: ZodType<T, ZodTypeDef, unknown>, instructions: string, prompt: string): Promise<T> {
+async function generateJson<T>(label: string, schema: ZodType<T, ZodTypeDef, unknown>, instructions: string, prompt: string, requestSignal?: AbortSignal): Promise<T> {
   try {
     const { object } = await generateObject({
-      ...generateObjectOptions(),
+      ...generateObjectOptions(requestSignal),
       schema,
       instructions,
       prompt,
     })
     return object
   } catch (e) {
+    // Never swallow aborts or timeouts — they must propagate so the pipeline stops.
+    if (requestSignal?.aborted || isAbortError(e)) throw e
     console.warn(`[generate] ${label}: structured call failed (${errMsg(e).split('\n')[0]}), falling back to plain-text JSON`)
     const { text } = await generateText({
-      ...generateObjectOptions(),
+      ...generateObjectOptions(requestSignal),
       system: instructions,
       prompt,
     })
@@ -105,44 +116,65 @@ async function generateJson<T>(label: string, schema: ZodType<T, ZodTypeDef, unk
 }
 
 /* ── LLM calls (schema-validated via generateObject) ──────── */
-async function callOutline(article: string): Promise<Outline> {
+async function callOutline(article: string, signal?: AbortSignal): Promise<Outline> {
   const { instructions, prompt } = buildOutlinePrompt(article)
-  return generateJson('outline', OutlineSchema, instructions, prompt)
+  return generateJson('outline', OutlineSchema, instructions, prompt, signal)
 }
 
-async function callSection(article: string, section: OutlineSection, outline: Outline): Promise<SectionDetail> {
-  try {
-    const { instructions, prompt } = buildSectionPrompt(article, section, outline)
-    return await generateJson(`section "${section.title}"`, SectionDetailSchema, instructions, prompt)
-  } catch (e) {
-    // degrade gracefully: keep the course usable, but log the real reason server-side
-    console.error(`[generate] section "${section.title}" failed validation/generation, using placeholder:`, e)
-    return {
-      screens: [
+/** Per-section result plus a flag telling whether the content is a degraded placeholder. */
+interface SectionResult {
+  detail: SectionDetail
+  degraded: boolean
+  reason?: string
+}
+
+const PLACEHOLDER_DETAIL: SectionDetail = {
+  screens: [
+    {
+      blocks: [
         {
-          blocks: [
+          type: 'paragraph',
+          segments: [
             {
-              type: 'paragraph',
-              segments: [
-                {
-                  type: 'text',
-                  text: '本小节内容在生成时遇到了问题，未能完整呈现。可以尝试重新生成课程；若问题反复出现，请检查原文是否过短或稍后重试。',
-                },
-              ],
+              type: 'text',
+              text: '本小节内容在生成时遇到了问题，未能完整呈现。可以尝试重新生成课程；若问题反复出现，请检查原文是否过短或稍后重试。',
             },
           ],
         },
       ],
+    },
+  ],
+}
+
+async function callSection(article: string, section: OutlineSection, outline: Outline, signal?: AbortSignal): Promise<SectionResult> {
+  try {
+    const { instructions, prompt } = buildSectionPrompt(article, section, outline)
+    const detail = await generateJson(`section "${section.title}"`, SectionDetailSchema, instructions, prompt, signal)
+    return { detail, degraded: false }
+  } catch (e) {
+    // Abort/timeout propagates so the pipeline can stop immediately on disconnect.
+    if (signal?.aborted || isAbortError(e)) throw e
+    // Only degrade on model-output failures (ZodError). Transport/auth/network errors
+    // also degrade per-section, but the caller surfaces a top-level error if EVERY
+    // section failed — so a total outage is never silently dressed up as a course.
+    const isValidation = e instanceof ZodError
+    if (!isValidation) {
+      console.error(`[generate] section "${section.title}" failed (transport/auth):`, errMsg(e))
+    } else {
+      console.error(`[generate] section "${section.title}" failed validation, using placeholder:`, e)
     }
+    return { detail: PLACEHOLDER_DETAIL, degraded: true, reason: errMsg(e) }
   }
 }
 
 /* ── Public entry: an async generator of GenEvent ──────────── */
-export async function* generate(article: string): AsyncGenerator<GenEvent> {
+export async function* generate(article: string, requestSignal?: AbortSignal): AsyncGenerator<GenEvent> {
   const q = new AsyncQueue<GenEvent>()
+  const aborted = () => !!requestSignal?.aborted
 
   void (async () => {
     try {
+      if (aborted()) return
       const clean = article.trim()
       if (clean.length < 80) {
         q.push({ type: 'error', message: '文章太短（少于 80 字），请粘贴更完整的内容。' })
@@ -150,19 +182,36 @@ export async function* generate(article: string): AsyncGenerator<GenEvent> {
       }
 
       q.push({ type: 'outline' })
-      const outline: Outline = config.mock ? mockOutline(clean) : await callOutline(clean)
+      const outline: Outline = config.mock ? mockOutline(clean) : await callOutline(clean, requestSignal)
+      if (aborted()) return
       const total = outline.sections.length
 
       const sections: Section[] = new Array(total)
       let completed = 0
+      let degraded = 0
       await runPool(outline.sections, config.concurrency, async (s: OutlineSection, i: number) => {
-        const detail = config.mock
-          ? mockSectionScreens(clean, i, total)
-          : await callSection(clean, s, outline)
-        sections[i] = { id: s.id, title: s.title, subtitle: s.subtitle, takeaways: detail.takeaways, screens: detail.screens }
+        if (aborted()) return
+        const result = config.mock
+          ? ({ detail: mockSectionScreens(clean, i, total), degraded: false } satisfies SectionResult)
+          : await callSection(clean, s, outline, requestSignal)
+        if (aborted()) return
+        const d = result.detail
+        sections[i] = { id: s.id, title: s.title, subtitle: s.subtitle, takeaways: d.takeaways, screens: d.screens }
+        if (result.degraded) degraded++
         completed++
         q.push({ type: 'section', index: completed, total, title: s.title })
       })
+      if (aborted()) return
+
+      // Every section failed → almost certainly a systemic outage (bad key, model
+      // name, network). Surface it instead of rendering an all-placeholder course.
+      if (!config.mock && total > 0 && degraded === total) {
+        q.push({
+          type: 'error',
+          message: `全部 ${total} 个章节均生成失败，课程无法呈现。请检查 LLM 配置（API Key、模型名、网络）后重试。`,
+        })
+        return
+      }
 
       q.push({ type: 'rendering' })
       const course: Course = {
@@ -174,9 +223,11 @@ export async function* generate(article: string): AsyncGenerator<GenEvent> {
       }
       const validated = CourseSchema.parse(course)
       const html = renderCourse(validated, loadAssets())
+      if (aborted()) return
       q.push({ type: 'done', html })
     } catch (e) {
-      q.push({ type: 'error', message: errMsg(e) })
+      // A disconnect/abort is expected — don't emit a misleading error event.
+      if (!aborted() && !isAbortError(e)) q.push({ type: 'error', message: errMsg(e) })
     } finally {
       q.close()
     }

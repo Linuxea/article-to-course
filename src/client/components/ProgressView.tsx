@@ -1,6 +1,6 @@
 import type { GenEvent } from '../sse'
 
-export function ProgressView({ events }: { events: GenEvent[] }) {
+export function ProgressView({ events, onCancel }: { events: GenEvent[]; onCancel: () => void }) {
   return (
     <div className="panel">
       <h1 className="panel-title">正在生成课程…</h1>
@@ -21,6 +21,9 @@ export function ProgressView({ events }: { events: GenEvent[] }) {
           )
         })}
       </ol>
+      <div className="cancel-row">
+        <button className="ghost-btn" onClick={onCancel}>取消</button>
+      </div>
     </div>
   )
 }

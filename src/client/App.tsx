@@ -15,6 +15,7 @@ export function App() {
   const [errorMsg, setErrorMsg] = useState('')
   const info = useMockInfo()
   const busyRef = useRef(false)
+  const abortRef = useRef<AbortController | null>(null)
 
   const title = html ? (html.match(/<title>([^<]*)<\/title>/)?.[1] ?? '课程') : '课程'
 
@@ -27,25 +28,51 @@ export function App() {
     setPhase('generating')
     busyRef.current = true
 
-    streamGenerate(text, (ev) => {
-      setEvents((prev) => [...prev, ev])
-      if (ev.type === 'done') {
-        setHtml(ev.html)
-        setPhase('done')
-        busyRef.current = false
-      } else if (ev.type === 'error') {
-        setErrorMsg(ev.message)
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    streamGenerate(
+      text,
+      (ev) => {
+        setEvents((prev) => [...prev, ev])
+        if (ev.type === 'done') {
+          setHtml(ev.html)
+          setPhase('done')
+          busyRef.current = false
+          abortRef.current = null
+        } else if (ev.type === 'error') {
+          setErrorMsg(ev.message)
+          setPhase('error')
+          busyRef.current = false
+          abortRef.current = null
+        }
+      },
+      controller.signal,
+    ).catch((e: unknown) => {
+      // User-initiated cancel: return to the input, not to an error screen.
+      if (controller.signal.aborted) {
+        setPhase('idle')
+      } else {
+        setErrorMsg(e instanceof Error ? e.message : String(e))
         setPhase('error')
-        busyRef.current = false
       }
-    }).catch((e: unknown) => {
-      setErrorMsg(e instanceof Error ? e.message : String(e))
-      setPhase('error')
       busyRef.current = false
+      abortRef.current = null
     })
   }, [])
 
+  const handleCancel = useCallback(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    busyRef.current = false
+    setPhase('idle')
+    setEvents([])
+  }, [])
+
   const handleRegenerate = useCallback(() => {
+    abortRef.current?.abort()
+    abortRef.current = null
+    busyRef.current = false
     setPhase('idle')
     setEvents([])
     setHtml('')
@@ -70,7 +97,7 @@ export function App() {
       ) : (
         <main className="stage-center">
           {phase === 'generating' ? (
-            <ProgressView events={events} />
+            <ProgressView events={events} onCancel={handleCancel} />
           ) : phase === 'error' ? (
             <div className="panel">
               <h1 className="panel-title">出错了 😢</h1>
@@ -78,7 +105,7 @@ export function App() {
               <button className="primary-btn" onClick={handleRegenerate}>返回重试</button>
             </div>
           ) : (
-            <InputForm initial={article} busy={false} info={info} onSubmit={handleSubmit} />
+            <InputForm initial={article} info={info} onSubmit={handleSubmit} />
           )}
         </main>
       )}

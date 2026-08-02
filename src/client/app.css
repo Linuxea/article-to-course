@@ -257,6 +257,8 @@ kbd {
 
 .error-msg { color: var(--danger); font-size: 14px; line-height: 1.7; margin: 8px 0 20px; }
 
+.cancel-row { display: flex; justify-content: flex-end; margin-top: 18px; }
+
 /* ── export bar & preview ────────────────────────────────── */
 .export-bar {
   display: flex;

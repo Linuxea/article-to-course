@@ -27,6 +27,12 @@ export const config = {
   requestTimeoutMs: num('LLM_TIMEOUT_MS', 300_000),
   maxOutputTokens: num('LLM_MAX_OUTPUT_TOKENS', 16_000),
   maxRetries: num('LLM_MAX_RETRIES', 2),
+  /** Hard cap on the article length sent to the model (chars). Guards against token blow-up. */
+  maxArticleChars: num('LLM_MAX_ARTICLE_CHARS', 16_000),
+  /** Max bytes accepted in a POST body (prevents memory/cost abuse). */
+  maxBodyBytes: num('MAX_BODY_BYTES', 200_000),
+  /** Seconds between SSE keep-alive comments (prevents proxy idle disconnects). */
+  ssePingSeconds: num('SSE_PING_SECONDS', 15),
   port: num('PORT', 3000),
 } as const
 

@@ -101,7 +101,7 @@ export function renderCourse(course: Course, assets: RenderAssets): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: https:; base-uri 'none'; form-action 'none'">
   <title>${esc(course.title)}</title>
   <noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
   <link rel="preconnect" href="https://fonts.googleapis.com">
