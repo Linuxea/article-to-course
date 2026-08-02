@@ -3,6 +3,9 @@
 ;(function () {
   'use strict'
 
+  /* mark JS availability so CSS can keep content visible when scripts don't run */
+  document.documentElement.classList.add('js')
+
   /* ── scroll progress bar ───────────────────────────────── */
   var progressBar = document.getElementById('progressBar')
   function updateProgress() {
@@ -14,28 +17,36 @@
     progressBar.setAttribute('aria-valuenow', String(Math.round(pct)))
   }
   window.addEventListener('scroll', updateProgress, { passive: true })
+  window.addEventListener('resize', updateProgress, { passive: true })
   updateProgress()
 
   /* ── reveal on scroll ──────────────────────────────────── */
-  var revealIO = new IntersectionObserver(
-    function (entries) {
-      entries.forEach(function (en) {
-        if (en.isIntersecting) {
-          en.target.classList.add('in')
-          revealIO.unobserve(en.target)
-        }
-      })
-    },
-    { threshold: 0.08, rootMargin: '0px 0px -4% 0px' },
-  )
-  document.querySelectorAll('.reveal').forEach(function (el) {
-    revealIO.observe(el)
-  })
+  var revealEls = document.querySelectorAll('.reveal')
+  if ('IntersectionObserver' in window) {
+    var revealIO = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (en) {
+          if (en.isIntersecting) {
+            en.target.classList.add('in')
+            revealIO.unobserve(en.target)
+          }
+        })
+      },
+      { threshold: 0.08, rootMargin: '0px 0px -4% 0px' },
+    )
+    revealEls.forEach(function (el) {
+      revealIO.observe(el)
+    })
+  } else {
+    revealEls.forEach(function (el) {
+      el.classList.add('in')
+    })
+  }
 
   /* ── toc active chapter ────────────────────────────────── */
   var tocLinks = Array.prototype.slice.call(document.querySelectorAll('.toc-link'))
   var chapters = Array.prototype.slice.call(document.querySelectorAll('.chapter'))
-  if (tocLinks.length && chapters.length) {
+  if (tocLinks.length && chapters.length && 'IntersectionObserver' in window) {
     var tocIO = new IntersectionObserver(
       function (entries) {
         entries.forEach(function (en) {
@@ -57,6 +68,7 @@
   document.addEventListener('keydown', function (e) {
     var t = e.target
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
+    if (t && (t.tagName === 'BUTTON' || t.tagName === 'A')) return
     var idx = -1
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') idx = 1
     else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') idx = -1
@@ -107,7 +119,7 @@
     }
     tip.style.left = x + 'px'
     tip.style.top = y + 'px'
-    var arrowX = Math.max(12, r.left + window.scrollX + r.width / 2 - x - 5)
+    var arrowX = Math.max(12, Math.min(r.left + window.scrollX + r.width / 2 - x - 5, w - 12))
     tip.style.setProperty('--arrow-x', arrowX + 'px')
   }
   function hideTerm() {
@@ -204,16 +216,24 @@
     st.all.hidden = done
     st.replay.hidden = !done
   }
-  function chatRevealOne(st) {
-    var nextMsg = st.msgs.find(function (m) {
-      return m.hidden
-    })
+  function chatRevealOne(st, win) {
+    if (win._chatBusy) return
+    var nextMsg = null
+    for (var i = 0; i < st.msgs.length; i++) {
+      if (st.msgs[i].hidden) {
+        nextMsg = st.msgs[i]
+        break
+      }
+    }
     if (!nextMsg) return
+    win._chatBusy = true
     var who = nextMsg.getAttribute('data-who') || ''
-    st.typing.querySelector('.chat-ava').textContent = who.slice(0, 1) || '?'
+    var first = Array.from(who)[0]
+    st.typing.querySelector('.chat-ava').textContent = first || '?'
     st.typing.hidden = false
     st.body.scrollTop = st.body.scrollHeight
-    setTimeout(function () {
+    win._chatTimer = setTimeout(function () {
+      win._chatBusy = false
       st.typing.hidden = true
       nextMsg.hidden = false
       chatUpdate(st)
@@ -223,10 +243,13 @@
   document.addEventListener('click', function (e) {
     var btn = e.target.closest ? e.target.closest('.chat-next, .chat-all, .chat-replay') : null
     if (!btn) return
-    var st = chatState(btn.closest('.chat'))
+    var win = btn.closest('.chat')
+    var st = chatState(win)
     if (btn.classList.contains('chat-next')) {
-      chatRevealOne(st)
+      chatRevealOne(st, win)
     } else if (btn.classList.contains('chat-all')) {
+      clearTimeout(win._chatTimer)
+      win._chatBusy = false
       st.typing.hidden = true
       st.msgs.forEach(function (m) {
         m.hidden = false
@@ -234,6 +257,8 @@
       chatUpdate(st)
       st.body.scrollTop = st.body.scrollHeight
     } else {
+      clearTimeout(win._chatTimer)
+      win._chatBusy = false
       st.msgs.forEach(function (m) {
         m.hidden = true
       })
@@ -255,7 +280,7 @@
   function flowState(flow) {
     return {
       steps: JSON.parse(flow.getAttribute('data-steps') || '[]'),
-      idx: 0,
+      idx: parseInt(flow.getAttribute('data-idx') || '0', 10) || 0,
       packet: flow.querySelector('.flow-packet'),
       label: flow.querySelector('.flow-label'),
       next: flow.querySelector('.flow-next'),
@@ -284,11 +309,13 @@
       st.packet.hidden = true
     }
     st.idx++
+    flow.setAttribute('data-idx', String(st.idx))
     st.count.textContent = '步骤 ' + st.idx + ' / ' + st.steps.length
     if (st.idx >= st.steps.length) {
       st.next.hidden = true
       st.replay.hidden = false
-      setTimeout(function () {
+      clearTimeout(flow._doneTimer)
+      flow._doneTimer = setTimeout(function () {
         flow.querySelectorAll('.flow-actor').forEach(function (a) {
           a.classList.remove('active')
         })
@@ -303,6 +330,8 @@
     var flow = btn.closest('.flow')
     var st = flowState(flow)
     if (btn.classList.contains('flow-replay')) {
+      clearTimeout(flow._doneTimer)
+      flow.setAttribute('data-idx', '0')
       flow.querySelectorAll('.flow-actor').forEach(function (a) {
         a.classList.remove('active')
       })

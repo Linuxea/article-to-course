@@ -109,6 +109,17 @@ describe('renderCourse — block types emit correct engine contract', () => {
     expect(steps[0].packet).toBe(true)
   })
 
+  it('flow: packet lives inside .flow-actors so absolute positioning math holds', () => {
+    const m = html.match(/<div class="flow-actors">([\s\S]*?)<\/div>\s*<div class="flow-label">/)
+    expect(m).not.toBeNull()
+    expect(m?.[1]).toContain('class="flow-packet"')
+  })
+
+  it('emits a CSP meta tag and a noscript reveal fallback', () => {
+    expect(html).toContain('http-equiv="Content-Security-Policy"')
+    expect(html).toContain('<noscript><style>.reveal')
+  })
+
   it('keypoints: emits kp-grid with cards', () => {
     expect(html).toContain('class="kp-grid reveal"')
     expect(html).toContain('class="kp-card"')
@@ -167,5 +178,47 @@ describe('renderCourse — escaping', () => {
     expect(html).toContain('data-definition="a &lt;b&gt; &amp; &quot;c&quot;"')
     // raw unescaped angle brackets from the payload must NOT leak as markup
     expect(html).not.toContain('<b>')
+  })
+
+  it('chat attributes are escaped exactly once and avatars are code-point safe', () => {
+    const html = renderCourse(
+      {
+        title: 'T',
+        accent: 'teal',
+        sections: [
+          {
+            id: 's',
+            title: 'S',
+            screens: [
+              {
+                blocks: [
+                  {
+                    type: 'chat',
+                    actors: [
+                      { id: 'a', name: '小<明>', colorIndex: 1 },
+                      { id: 'b', name: '😀机器人', colorIndex: 2 },
+                    ],
+                    messages: [
+                      { actorId: 'a', text: 'hi' },
+                      { actorId: 'b', text: 'yo' },
+                      { actorId: 'a', text: 'bye' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      STUB,
+    )
+    // attribute escaped exactly once — no double-escaping like &amp;lt;
+    expect(html).toContain('data-who="小&lt;明&gt;"')
+    expect(html).not.toContain('&amp;lt;')
+    // bubble text renders the escaped name as content
+    expect(html).toContain('<span class="chat-who" style="color:var(--actor-1)">小&lt;明&gt;</span>')
+    // emoji name: avatar is the full code point, not a broken surrogate half
+    expect(html).toContain('data-ava="😀"')
+    expect(html).not.toContain('\uD83D</div>')
   })
 })

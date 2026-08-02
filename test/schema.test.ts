@@ -11,8 +11,25 @@ describe('CourseSchema', () => {
   })
 
   it('defaults accent to vermillion when omitted', () => {
-    const parsed = CourseSchema.parse({ title: 'T', sections: [{ id: 's', title: 'S', screens: [{ blocks: [] }] }] })
+    const parsed = CourseSchema.parse({
+      title: 'T',
+      sections: [
+        {
+          id: 's',
+          title: 'S',
+          screens: [{ blocks: [{ type: 'paragraph', segments: [{ type: 'text', text: 'x' }] }] }],
+        },
+      ],
+    })
     expect(parsed.accent).toBe('vermillion')
+  })
+
+  it('rejects a screen with an empty blocks array', () => {
+    const bad = {
+      title: 'T',
+      sections: [{ id: 's', title: 'S', screens: [{ blocks: [] }] }],
+    }
+    expect(() => CourseSchema.parse(bad)).toThrow()
   })
 
   it('rejects an unknown block type', () => {
@@ -30,9 +47,7 @@ describe('CourseSchema', () => {
   })
 
   it('rejects a quiz whose `correct` does not match any option', () => {
-    // Schema does not enforce cross-field correctness; this is a render-time concern.
-    // Here we just ensure a well-formed quiz parses.
-    const q = {
+    const quiz = (correct: string) => ({
       title: 'T',
       sections: [
         {
@@ -48,7 +63,7 @@ describe('CourseSchema', () => {
                     { value: 'option-a', text: 'a' },
                     { value: 'option-b', text: 'b' },
                   ],
-                  correct: 'option-a',
+                  correct,
                   explanationRight: 'r',
                   explanationWrong: 'w',
                 },
@@ -57,8 +72,69 @@ describe('CourseSchema', () => {
           ],
         },
       ],
+    })
+    expect(CourseSchema.parse(quiz('option-a'))).toBeTruthy()
+    expect(() => CourseSchema.parse(quiz('option-z'))).toThrow()
+  })
+
+  it('rejects chat whose actorId is not declared in actors', () => {
+    const bad = {
+      title: 'T',
+      sections: [
+        {
+          id: 's',
+          title: 'S',
+          screens: [
+            {
+              blocks: [
+                {
+                  type: 'chat',
+                  actors: [
+                    { id: 'a', name: 'A', colorIndex: 1 },
+                    { id: 'b', name: 'B', colorIndex: 2 },
+                  ],
+                  messages: [
+                    { actorId: 'a', text: '1' },
+                    { actorId: 'ghost', text: '2' },
+                    { actorId: 'b', text: '3' },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
     }
-    expect(CourseSchema.parse(q)).toBeTruthy()
+    expect(() => CourseSchema.parse(bad)).toThrow()
+  })
+
+  it('rejects a flow step referencing an actor index out of range', () => {
+    const flow = (to: number) => ({
+      title: 'T',
+      sections: [
+        {
+          id: 's',
+          title: 'S',
+          screens: [
+            {
+              blocks: [
+                {
+                  type: 'flow',
+                  actors: [{ label: 'A' }, { label: 'B' }],
+                  steps: [
+                    { from: 1, to: 2, label: 's1', packet: true },
+                    { from: 2, to, label: 's2', packet: true },
+                    { from: 1, to: 2, label: 's3', packet: true },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+    expect(CourseSchema.parse(flow(1))).toBeTruthy()
+    expect(() => CourseSchema.parse(flow(3))).toThrow()
   })
 
   it('rejects chat with fewer than 2 actors', () => {

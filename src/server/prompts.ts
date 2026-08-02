@@ -12,7 +12,8 @@ export const BLOCK_CATALOG = `你只能使用以下 block 类型（每个对象�
    { "type":"callout", "variant":"accent"|"info"|"warning", "title":"可选标题", "body":"内容" }
 
 3. translation — 原文 ↔ 大白话左右对照。
-   { "type":"translation", "original":["原文行1","原文行2"], "plain":["对应的通俗解释行1","解释行2"] }
+   { "type":"translation", "leftLabel":"可选，左栏标题（默认：原文）", "rightLabel":"可选，右栏标题（默认：大白话）",
+     "original":["原文行1","原文行2"], "plain":["对应的通俗解释行1","解释行2"] }
    original 与 plain 的行尽量一一对应。
    使用条件：仅当原文有特别难懂、需要逐句对照的关键句时使用；一般性讲解直接用 paragraph 即可。
 
@@ -29,7 +30,7 @@ export const BLOCK_CATALOG = `你只能使用以下 block 类型（每个对象�
 6. flow — 数据/流程逐步动画。
    { "type":"flow", "actors":[{"label":"浏览器"},{"label":"服务器"}],
      "steps":[{"from":1,"to":2,"label":"描述这一步","packet":true}] }
-   from / to 是 actor 的序号（从 1 开始）；3-6 步为宜。
+    from / to 是 actor 的序号（从 1 开始，不得超过 actor 数量）；3 到 6 步。
 
 7. keypoints — 要点卡片网格（总结/清单）。
    { "type":"keypoints", "items":[{"title":"标题","body":"1-2 句，点明要点及其意义","icon":"可选emoji"}] }
@@ -60,7 +61,7 @@ export const OutlineSchema = z.object({
   subtitle: z.string().optional(),
   accent: z.enum(['vermillion', 'coral', 'teal', 'amber', 'forest']),
   objectives: z.array(z.string()).min(3).max(5),
-  sections: z.array(OutlineSectionSchema).min(3).max(8),
+  sections: z.array(OutlineSectionSchema).min(4).max(7),
 })
 export type Outline = z.infer<typeof OutlineSchema>
 export type OutlineSection = z.infer<typeof OutlineSectionSchema>
@@ -69,7 +70,7 @@ export type OutlineSection = z.infer<typeof OutlineSectionSchema>
 import { ScreenSchema } from '../shared/schema'
 export const SectionDetailSchema = z.object({
   screens: z.array(ScreenSchema).min(1).max(5),
-  takeaways: z.array(z.string()).min(1).max(4).optional(),
+  takeaways: z.array(z.string()).min(1).max(3).optional(),
 })
 export type SectionDetail = z.infer<typeof SectionDetailSchema>
 

@@ -82,11 +82,24 @@ async function callSection(article: string, section: OutlineSection, outline: Ou
       prompt,
     })
     return object
-  } catch {
-    // degrade gracefully: a single paragraph noting the section couldn't be fully generated
+  } catch (e) {
+    // degrade gracefully: keep the course usable, but log the real reason server-side
+    console.error(`[generate] section "${section.title}" failed validation/generation, using placeholder:`, e)
     return {
       screens: [
-        { heading: section.title, blocks: [{ type: 'paragraph', segments: [{ type: 'text', text: section.focus }] }] },
+        {
+          blocks: [
+            {
+              type: 'paragraph',
+              segments: [
+                {
+                  type: 'text',
+                  text: '本小节内容在生成时遇到了问题，未能完整呈现。可以尝试重新生成课程；若问题反复出现，请检查原文是否过短或稍后重试。',
+                },
+              ],
+            },
+          ],
+        },
       ],
     }
   }

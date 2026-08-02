@@ -18,6 +18,7 @@ export async function streamGenerate(article: string, onEvent: (ev: GenEvent) =>
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let terminated = false
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
@@ -28,12 +29,21 @@ export async function streamGenerate(article: string, onEvent: (ev: GenEvent) =>
       const line = raw.trim()
       if (!line.startsWith('data:')) continue
       const payload = line.slice(5).trim()
-      if (payload === '[DONE]') return
+      if (payload === '[DONE]') {
+        terminated = true
+        break
+      }
       try {
-        onEvent(JSON.parse(payload) as GenEvent)
+        const ev = JSON.parse(payload) as GenEvent
+        if (ev.type === 'done' || ev.type === 'error') terminated = true
+        onEvent(ev)
       } catch {
         // ignore malformed keep-alive lines
       }
     }
+    if (terminated) return
+  }
+  if (!terminated) {
+    throw new Error('生成中断：连接提前关闭，请重试。')
   }
 }

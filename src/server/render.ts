@@ -62,6 +62,10 @@ function collectStats(course: Course): Stats {
           case 'arch':
             chars += b.nodes.reduce((n, nd) => n + nd.label.length + nd.desc.length, 0)
             break
+          default: {
+            const _exhaustive: never = b
+            throw new Error(`unknown block type: ${JSON.stringify(_exhaustive)}`)
+          }
         }
       }
     }
@@ -70,9 +74,6 @@ function collectStats(course: Course): Stats {
 }
 
 export function renderCourse(course: Course, assets: RenderAssets): string {
-  let counter = 0
-  const uid = (prefix: string) => `${prefix}-${++counter}`
-
   const accent: Accent = course.accent
   const a = ACCENTS[accent]
   const stats = collectStats(course)
@@ -84,7 +85,7 @@ export function renderCourse(course: Course, assets: RenderAssets): string {
     )
     .join('\n')
 
-  const chapters = course.sections.map((s, i) => renderChapter(s, i, uid)).join('\n')
+  const chapters = course.sections.map((s, i) => renderChapter(s, i)).join('\n')
 
   const objectives = course.objectives?.length
     ? `      <div class="objectives reveal">
@@ -100,7 +101,9 @@ export function renderCourse(course: Course, assets: RenderAssets): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; base-uri 'none'; form-action 'none'">
   <title>${esc(course.title)}</title>
+  <noscript><style>.reveal { opacity: 1 !important; transform: none !important; }</style></noscript>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -163,9 +166,9 @@ ${assets.js}
 </html>`
 }
 
-function renderChapter(section: Section, index: number, uid: (p: string) => string): string {
+function renderChapter(section: Section, index: number): string {
   const number = String(index + 1).padStart(2, '0')
-  const screens = section.screens.map((s) => renderScreen(s, uid)).join('\n')
+  const screens = section.screens.map((s) => renderScreen(s)).join('\n')
   const takeaways = section.takeaways?.length
     ? `      <div class="takeaways reveal">
         <div class="takeaways-label">📌 本节小结</div>
@@ -187,14 +190,14 @@ ${takeaways}
       </section>`
 }
 
-function renderScreen(screen: Screen, uid: (p: string) => string): string {
+function renderScreen(screen: Screen): string {
   const heading = screen.heading ? `        <h3 class="screen-heading reveal">${esc(screen.heading)}</h3>` : ''
-  const blocks = screen.blocks.map((b) => renderBlock(b, uid)).join('\n')
+  const blocks = screen.blocks.map((b) => renderBlock(b)).join('\n')
   return `${heading}
 ${blocks}`
 }
 
-function renderBlock(block: Block, uid: (p: string) => string): string {
+function renderBlock(block: Block): string {
   switch (block.type) {
     case 'paragraph':
       return `        <p class="prose reveal">${block.segments
@@ -231,7 +234,6 @@ function renderBlock(block: Block, uid: (p: string) => string): string {
     }
 
     case 'quiz': {
-      uid('quiz')
       const options = block.options
         .map(
           (o) =>
@@ -253,17 +255,16 @@ function renderBlock(block: Block, uid: (p: string) => string): string {
     }
 
     case 'chat': {
-      uid('chat')
       const actorById = new Map(block.actors.map((ac) => [ac.id, ac]))
       const messages = block.messages
         .map((m) => {
           const actor = actorById.get(m.actorId)
           const colorVar = actor ? `var(--actor-${actor.colorIndex})` : 'var(--accent)'
-          const initial = actor ? esc(actor.name.slice(0, 1)) : '?'
-          const name = actor ? esc(actor.name) : esc(m.actorId)
-          return `<div class="chat-msg" data-ava-style="${colorVar}" data-ava="${initial}" data-who="${escAttr(name)}" hidden>
-              <div class="chat-ava" style="background:${colorVar}">${initial}</div>
-              <div class="chat-bub"><span class="chat-who" style="color:${colorVar}">${name}</span><p>${esc(m.text)}</p></div>
+          const rawName = actor ? actor.name : m.actorId
+          const initial = Array.from(rawName)[0] ?? '?'
+          return `<div class="chat-msg" data-ava="${escAttr(initial)}" data-who="${escAttr(rawName)}" hidden>
+              <div class="chat-ava" style="background:${colorVar}">${esc(initial)}</div>
+              <div class="chat-bub"><span class="chat-who" style="color:${colorVar}">${esc(rawName)}</span><p>${esc(m.text)}</p></div>
             </div>`
         })
         .join('\n            ')
@@ -297,8 +298,8 @@ function renderBlock(block: Block, uid: (p: string) => string): string {
       return `        <div class="flow reveal" data-steps="${escAttr(JSON.stringify(stepsJson))}">
           <div class="flow-actors">
             ${actors}
+            <div class="flow-packet" hidden></div>
           </div>
-          <div class="flow-packet" hidden></div>
           <div class="flow-label">点击「下一步」开始演示</div>
           <div class="flow-bar">
             <button class="btn btn--primary flow-next">下一步</button>
@@ -377,6 +378,11 @@ function renderBlock(block: Block, uid: (p: string) => string): string {
             <p class="arch-detail-desc">查看它在整体中扮演什么角色。</p>
           </div>
         </div>`
+    }
+
+    default: {
+      const _exhaustive: never = block
+      throw new Error(`unknown block type: ${JSON.stringify(_exhaustive)}`)
     }
   }
 }

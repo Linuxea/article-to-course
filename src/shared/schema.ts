@@ -8,7 +8,7 @@ export const ACCENTS: Record<Accent, { color: string; hover: string; light: stri
   vermillion: { color: '#D94F30', hover: '#C4432A', light: '#FDEEE9', muted: '#E8836C' },
   coral: { color: '#E06B56', hover: '#C85A47', light: '#FDECEA', muted: '#E89585' },
   teal: { color: '#2A7B9B', hover: '#1F6280', light: '#E4F2F7', muted: '#5A9DB8' },
-  amber: { color: '#D4A843', hover: '#BF9530', light: '#FDF5E0', muted: '#E0C070' },
+  amber: { color: '#8A6D14', hover: '#755C0F', light: '#FDF5E0', muted: '#E0C070' },
   forest: { color: '#2D8B55', hover: '#226B41', light: '#E8F5EE', muted: '#5AAD7A' },
 }
 
@@ -42,14 +42,23 @@ export const TranslationBlockSchema = z.object({
 })
 
 export const QuizOptionSchema = z.object({ value: z.string(), text: z.string() })
-export const QuizBlockSchema = z.object({
-  type: z.literal('quiz'),
-  question: z.string(),
-  options: z.array(QuizOptionSchema).min(2),
-  correct: z.string(),
-  explanationRight: z.string(),
-  explanationWrong: z.string(),
-})
+export const QuizBlockSchema = z
+  .object({
+    type: z.literal('quiz'),
+    question: z.string(),
+    options: z.array(QuizOptionSchema).min(2).max(4),
+    correct: z.string(),
+    explanationRight: z.string(),
+    explanationWrong: z.string(),
+  })
+  .superRefine((q, ctx) => {
+    if (!q.options.some((o) => o.value === q.correct)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `correct "${q.correct}" does not match any option value`,
+      })
+    }
+  })
 
 export const ChatActorSchema = z.object({
   id: z.string(),
@@ -57,11 +66,23 @@ export const ChatActorSchema = z.object({
   colorIndex: z.number().int().min(1).max(5),
 })
 export const ChatMessageSchema = z.object({ actorId: z.string(), text: z.string() })
-export const ChatBlockSchema = z.object({
-  type: z.literal('chat'),
-  actors: z.array(ChatActorSchema).min(2),
-  messages: z.array(ChatMessageSchema).min(1),
-})
+export const ChatBlockSchema = z
+  .object({
+    type: z.literal('chat'),
+    actors: z.array(ChatActorSchema).min(2),
+    messages: z.array(ChatMessageSchema).min(3).max(8),
+  })
+  .superRefine((c, ctx) => {
+    const ids = new Set(c.actors.map((a) => a.id))
+    c.messages.forEach((m, i) => {
+      if (!ids.has(m.actorId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `message ${i} references unknown actorId "${m.actorId}"`,
+        })
+      }
+    })
+  })
 
 export const FlowStepSchema = z.object({
   from: z.number().int().min(1),
@@ -69,15 +90,26 @@ export const FlowStepSchema = z.object({
   label: z.string(),
   packet: z.boolean().default(true),
 })
-export const FlowBlockSchema = z.object({
-  type: z.literal('flow'),
-  actors: z.array(z.object({ label: z.string() })).min(2),
-  steps: z.array(FlowStepSchema).min(1),
-})
+export const FlowBlockSchema = z
+  .object({
+    type: z.literal('flow'),
+    actors: z.array(z.object({ label: z.string() })).min(2),
+    steps: z.array(FlowStepSchema).min(3).max(6),
+  })
+  .superRefine((f, ctx) => {
+    f.steps.forEach((s, i) => {
+      if (s.from > f.actors.length || s.to > f.actors.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `step ${i} references actor index outside 1..${f.actors.length}`,
+        })
+      }
+    })
+  })
 
 export const KeypointsBlockSchema = z.object({
   type: z.literal('keypoints'),
-  items: z.array(z.object({ title: z.string(), body: z.string(), icon: z.string().optional() })).min(1),
+  items: z.array(z.object({ title: z.string(), body: z.string(), icon: z.string().optional() })).min(1).max(3),
 })
 
 export const StepsBlockSchema = z.object({
@@ -131,7 +163,7 @@ export type Block = z.infer<typeof BlockSchema>
 /* ── Structure: Course → Section → Screen → blocks ───────── */
 export const ScreenSchema = z.object({
   heading: z.string().optional(),
-  blocks: z.array(BlockSchema),
+  blocks: z.array(BlockSchema).min(1),
 })
 export type Screen = z.infer<typeof ScreenSchema>
 
