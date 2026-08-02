@@ -24,7 +24,7 @@ export const config = {
   /** When true (or when no API key is set), generate from a local mock instead of calling an LLM. */
   mock: bool('LLM_MOCK', false) || (process.env.LLM_API_KEY ?? '').length === 0,
   concurrency: Math.max(1, Math.floor(num('CONCURRENCY', 3))),
-  requestTimeoutMs: num('LLM_TIMEOUT_MS', 120_000),
+  requestTimeoutMs: num('LLM_TIMEOUT_MS', 300_000),
   maxOutputTokens: num('LLM_MAX_OUTPUT_TOKENS', 16_000),
   maxRetries: num('LLM_MAX_RETRIES', 2),
   port: num('PORT', 3000),

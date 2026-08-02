@@ -1,4 +1,5 @@
-import { generateObject } from 'ai'
+import { generateObject, generateText } from 'ai'
+import type { ZodType, ZodTypeDef } from 'zod'
 import { config } from './config'
 import { generateObjectOptions } from './llm'
 import {
@@ -60,45 +61,59 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-/**
- * One application-level retry for "successful HTTP call but empty/invalid object"
- * failures (NoObjectGeneratedError), which maxRetries inside the SDK does not cover.
- */
-async function twice<T>(label: string, fn: () => Promise<T>): Promise<T> {
+/** Tolerate markdown fences / surrounding prose when parsing model output by hand. */
+export function parseJsonLenient(text: string): unknown {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
   try {
-    return await fn()
+    return JSON.parse(cleaned)
+  } catch {
+    const start = cleaned.indexOf('{')
+    const end = cleaned.lastIndexOf('}')
+    if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1))
+    throw new Error('no JSON object found in model output')
+  }
+}
+
+/**
+ * Structured generation with a plain-text fallback.
+ * Reasoning models on some OpenAI-compatible endpoints intermittently return zero
+ * text tokens (empty content, finishReason "stop") when response_format is sent.
+ * generateText sends no response_format, so retrying through it dodges that quirk;
+ * the result is still validated against the same Zod schema.
+ */
+async function generateJson<T>(label: string, schema: ZodType<T, ZodTypeDef, unknown>, instructions: string, prompt: string): Promise<T> {
+  try {
+    const { object } = await generateObject({
+      ...generateObjectOptions(),
+      schema,
+      instructions,
+      prompt,
+    })
+    return object
   } catch (e) {
-    console.warn(`[generate] ${label} failed, retrying once: ${errMsg(e).split('\n')[0]}`)
-    return await fn()
+    console.warn(`[generate] ${label}: structured call failed (${errMsg(e).split('\n')[0]}), falling back to plain-text JSON`)
+    const { text } = await generateText({
+      ...generateObjectOptions(),
+      system: instructions,
+      prompt,
+    })
+    return schema.parse(parseJsonLenient(text))
   }
 }
 
 /* ── LLM calls (schema-validated via generateObject) ──────── */
 async function callOutline(article: string): Promise<Outline> {
   const { instructions, prompt } = buildOutlinePrompt(article)
-  const { object } = await twice('outline', () =>
-    generateObject({
-      ...generateObjectOptions(),
-      schema: OutlineSchema,
-      instructions,
-      prompt,
-    }),
-  )
-  return object
+  return generateJson('outline', OutlineSchema, instructions, prompt)
 }
 
 async function callSection(article: string, section: OutlineSection, outline: Outline): Promise<SectionDetail> {
   try {
     const { instructions, prompt } = buildSectionPrompt(article, section, outline)
-    const { object } = await twice(`section "${section.title}"`, () =>
-      generateObject({
-        ...generateObjectOptions(),
-        schema: SectionDetailSchema,
-        instructions,
-        prompt,
-      }),
-    )
-    return object
+    return await generateJson(`section "${section.title}"`, SectionDetailSchema, instructions, prompt)
   } catch (e) {
     // degrade gracefully: keep the course usable, but log the real reason server-side
     console.error(`[generate] section "${section.title}" failed validation/generation, using placeholder:`, e)

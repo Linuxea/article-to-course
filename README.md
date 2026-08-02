@@ -35,6 +35,9 @@ npm start       # 单进程：托管 dist/ + 提供 /api（http://localhost:3000
 | `LLM_MODEL` | `deepseek-v4-flash` | 模型名 |
 | `LLM_MOCK` | `false` | 强制 mock（无 API key 时也会自动开启） |
 | `CONCURRENCY` | `3` | 并发生成多少个 section |
+| `LLM_MAX_OUTPUT_TOKENS` | `16000` | 单次 LLM 调用的最大 token 数（推理模型会额外消耗 reasoning token，不宜调小） |
+| `LLM_TIMEOUT_MS` | `300000` | 单次 LLM 请求超时（推理模型单次调用常需 2-4 分钟，不宜调小） |
+| `AI_SDK_LOG_WARNINGS` | `true` | 设为 `false` 可关闭 AI SDK 的警告日志（如端点不支持 `json_schema` 时的 responseFormat 提示——该提示无害，schema 仍由本地 Zod 校验） |
 | `PORT` | `3000` | 服务端口 |
 
 ## 工作原理
