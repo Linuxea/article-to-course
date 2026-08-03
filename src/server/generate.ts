@@ -114,52 +114,62 @@ export function parseJsonLenient(text: string): unknown {
 
 /**
  * Structured generation with a plain-text fallback.
+ *
  * Reasoning models on some OpenAI-compatible endpoints intermittently return zero
- * text tokens (empty content, finishReason "stop") when response_format is sent.
- * generateText sends no response_format, so retrying through it dodges that quirk;
- * the result is still validated against the same Zod schema.
+ * text tokens (empty content, finishReason "stop") when response_format is sent,
+ * and DeepSeek's official API rejects json_schema outright. So unless the endpoint
+ * is explicitly known to support structured outputs (LLM_STRUCTURED_OUTPUT=true),
+ * this skips generateObject entirely and goes straight to plain-text generation;
+ * the result is validated against the same Zod schema either way.
  */
 async function generateJson<T>(requestId: string, label: string, schema: ZodType<T, ZodTypeDef, unknown>, instructions: string, prompt: string, requestSignal?: AbortSignal): Promise<T> {
-  const startedAt = Date.now()
-  try {
-    const { object, finishReason } = await generateObject({
-      ...generateObjectOptions(requestSignal),
-      schema,
-      instructions,
-      prompt,
-    })
-    if (finishReason === 'length') {
-      console.warn(`[generate:${requestId}] ${label}: structured output hit max tokens (finishReason=length), JSON may be truncated`)
-    }
-    return object
-  } catch (e) {
-    // Never swallow aborts or timeouts — they must propagate so the pipeline stops.
-    if (requestSignal?.aborted || isAbortError(e)) throw e
-    console.warn(`[generate:${requestId}] ${label}: structured call failed after ${Date.now() - startedAt}ms (${errMsg(e).split('\n')[0]}), falling back to plain-text JSON`)
-    let text = ''
+  if (config.structuredOutput) {
+    const startedAt = Date.now()
     try {
-      const res = await generateText({
+      const { object, finishReason } = await generateObject({
         ...generateObjectOptions(requestSignal),
-        system: instructions,
+        schema,
+        instructions,
         prompt,
       })
-      text = res.text
-      if (res.finishReason === 'length') {
-        console.warn(`[generate:${requestId}] ${label}: fallback output truncated (finishReason=length, ${text.length} chars)`)
+      if (finishReason === 'length') {
+        console.warn(`[generate:${requestId}] ${label}: structured output hit max tokens (finishReason=length), JSON may be truncated`)
       }
-      return schema.parse(parseJsonLenient(text))
-    } catch (e2) {
-      if (requestSignal?.aborted || isAbortError(e2)) throw e2
-      if (e2 instanceof ZodError) {
-        console.error(`[generate:${requestId}] ${label}: fallback output failed schema validation — ${summarizeZodIssues(e2)}`)
-        console.error(`[generate:${requestId}] ${label}: raw output preview: ${outputPreview(text)}`)
-        throw e2
-      }
-      // Unparseable or empty output — a content failure, not a transport one.
-      console.error(`[generate:${requestId}] ${label}: fallback output could not be parsed — ${errMsg(e2).split('\n')[0]}`)
-      if (text) console.error(`[generate:${requestId}] ${label}: raw output preview: ${outputPreview(text)}`)
-      throw new ModelOutputError(`${label}: ${errMsg(e2).split('\n')[0]}`)
+      return object
+    } catch (e) {
+      // Never swallow aborts or timeouts — they must propagate so the pipeline stops.
+      if (requestSignal?.aborted || isAbortError(e)) throw e
+      console.warn(`[generate:${requestId}] ${label}: structured call failed after ${Date.now() - startedAt}ms (${errMsg(e).split('\n')[0]}), falling back to plain-text JSON`)
     }
+  }
+  return generateJsonPlainText(requestId, label, schema, instructions, prompt, requestSignal)
+}
+
+/** Plain-text generation (no response_format) + lenient JSON parse + Zod validation. */
+async function generateJsonPlainText<T>(requestId: string, label: string, schema: ZodType<T, ZodTypeDef, unknown>, instructions: string, prompt: string, requestSignal?: AbortSignal): Promise<T> {
+  let text = ''
+  try {
+    const res = await generateText({
+      ...generateObjectOptions(requestSignal),
+      system: instructions,
+      prompt,
+    })
+    text = res.text
+    if (res.finishReason === 'length') {
+      console.warn(`[generate:${requestId}] ${label}: output truncated (finishReason=length, ${text.length} chars)`)
+    }
+    return schema.parse(parseJsonLenient(text))
+  } catch (e2) {
+    if (requestSignal?.aborted || isAbortError(e2)) throw e2
+    if (e2 instanceof ZodError) {
+      console.error(`[generate:${requestId}] ${label}: model output failed schema validation — ${summarizeZodIssues(e2)}`)
+      console.error(`[generate:${requestId}] ${label}: raw output preview: ${outputPreview(text)}`)
+      throw e2
+    }
+    // Unparseable or empty output — a content failure, not a transport one.
+    console.error(`[generate:${requestId}] ${label}: model output could not be parsed — ${errMsg(e2).split('\n')[0]}`)
+    if (text) console.error(`[generate:${requestId}] ${label}: raw output preview: ${outputPreview(text)}`)
+    throw new ModelOutputError(`${label}: ${errMsg(e2).split('\n')[0]}`)
   }
 }
 

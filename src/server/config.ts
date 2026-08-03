@@ -23,6 +23,13 @@ export const config = {
   llmModel: process.env.LLM_MODEL ?? 'deepseek-v4-flash',
   /** When true (or when no API key is set), generate from a local mock instead of calling an LLM. */
   mock: bool('LLM_MOCK', false) || (process.env.LLM_API_KEY ?? '').length === 0,
+  /**
+   * When true, use structured generation (response_format json_schema). DeepSeek's
+   * official API does NOT support json_schema (400) and its json_object mode often
+   * returns empty content for reasoning models — so this defaults to false and the
+   * pipeline uses plain-text generation + local Zod validation instead.
+   */
+  structuredOutput: bool('LLM_STRUCTURED_OUTPUT', false),
   concurrency: Math.max(1, Math.floor(num('CONCURRENCY', 3))),
   requestTimeoutMs: num('LLM_TIMEOUT_MS', 300_000),
   maxOutputTokens: num('LLM_MAX_OUTPUT_TOKENS', 16_000),

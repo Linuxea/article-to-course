@@ -5,6 +5,10 @@ const provider = createOpenAICompatible({
   name: 'llm',
   baseURL: config.llmBaseUrl,
   apiKey: config.llmApiKey,
+  // Only advertise json_schema support when the endpoint actually provides it
+  // (LLM_STRUCTURED_OUTPUT=true). Otherwise the SDK downgrades to json_object,
+  // which some providers (DeepSeek) answer with empty content.
+  supportsStructuredOutputs: config.structuredOutput,
 })
 
 /** Configured language model (DeepSeek / OpenAI / any OpenAI-compatible endpoint). */
