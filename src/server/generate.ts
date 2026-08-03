@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { generateObject, generateText } from 'ai'
 import { ZodError, type ZodType, type ZodTypeDef } from 'zod'
 import { config } from './config'
@@ -61,6 +62,31 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/**
+ * Raised when the model's output is syntactically unparseable (or empty), as
+ * opposed to structurally invalid. Lets callers classify degradations as
+ * content errors instead of transport/auth errors.
+ */
+export class ModelOutputError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ModelOutputError'
+  }
+}
+
+/** Compact one-line summary of Zod issues (path + message) for logs. */
+export function summarizeZodIssues(e: ZodError): string {
+  return e.issues
+    .slice(0, 8)
+    .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+    .join('; ')
+}
+
+/** Truncated, JSON-quoted preview of raw model output for failure logs. */
+function outputPreview(text: string): string {
+  return JSON.stringify(text.trim().slice(0, 600))
+}
+
 /** True for AbortError / DOMException naming variants produced by fetch + ai SDK. */
 function isAbortError(e: unknown): boolean {
   if (e instanceof Error) {
@@ -93,32 +119,60 @@ export function parseJsonLenient(text: string): unknown {
  * generateText sends no response_format, so retrying through it dodges that quirk;
  * the result is still validated against the same Zod schema.
  */
-async function generateJson<T>(label: string, schema: ZodType<T, ZodTypeDef, unknown>, instructions: string, prompt: string, requestSignal?: AbortSignal): Promise<T> {
+async function generateJson<T>(requestId: string, label: string, schema: ZodType<T, ZodTypeDef, unknown>, instructions: string, prompt: string, requestSignal?: AbortSignal): Promise<T> {
+  const startedAt = Date.now()
   try {
-    const { object } = await generateObject({
+    const { object, finishReason } = await generateObject({
       ...generateObjectOptions(requestSignal),
       schema,
       instructions,
       prompt,
     })
+    if (finishReason === 'length') {
+      console.warn(`[generate:${requestId}] ${label}: structured output hit max tokens (finishReason=length), JSON may be truncated`)
+    }
     return object
   } catch (e) {
     // Never swallow aborts or timeouts — they must propagate so the pipeline stops.
     if (requestSignal?.aborted || isAbortError(e)) throw e
-    console.warn(`[generate] ${label}: structured call failed (${errMsg(e).split('\n')[0]}), falling back to plain-text JSON`)
-    const { text } = await generateText({
-      ...generateObjectOptions(requestSignal),
-      system: instructions,
-      prompt,
-    })
-    return schema.parse(parseJsonLenient(text))
+    console.warn(`[generate:${requestId}] ${label}: structured call failed after ${Date.now() - startedAt}ms (${errMsg(e).split('\n')[0]}), falling back to plain-text JSON`)
+    let text = ''
+    try {
+      const res = await generateText({
+        ...generateObjectOptions(requestSignal),
+        system: instructions,
+        prompt,
+      })
+      text = res.text
+      if (res.finishReason === 'length') {
+        console.warn(`[generate:${requestId}] ${label}: fallback output truncated (finishReason=length, ${text.length} chars)`)
+      }
+      return schema.parse(parseJsonLenient(text))
+    } catch (e2) {
+      if (requestSignal?.aborted || isAbortError(e2)) throw e2
+      if (e2 instanceof ZodError) {
+        console.error(`[generate:${requestId}] ${label}: fallback output failed schema validation — ${summarizeZodIssues(e2)}`)
+        console.error(`[generate:${requestId}] ${label}: raw output preview: ${outputPreview(text)}`)
+        throw e2
+      }
+      // Unparseable or empty output — a content failure, not a transport one.
+      console.error(`[generate:${requestId}] ${label}: fallback output could not be parsed — ${errMsg(e2).split('\n')[0]}`)
+      if (text) console.error(`[generate:${requestId}] ${label}: raw output preview: ${outputPreview(text)}`)
+      throw new ModelOutputError(`${label}: ${errMsg(e2).split('\n')[0]}`)
+    }
   }
 }
 
 /* ── LLM calls (schema-validated via generateObject) ──────── */
-async function callOutline(article: string, signal?: AbortSignal): Promise<Outline> {
-  const { instructions, prompt } = buildOutlinePrompt(article)
-  return generateJson('outline', OutlineSchema, instructions, prompt, signal)
+async function callOutline(requestId: string, article: string, signal?: AbortSignal): Promise<Outline> {
+  try {
+    const { instructions, prompt } = buildOutlinePrompt(article)
+    return await generateJson(requestId, 'outline', OutlineSchema, instructions, prompt, signal)
+  } catch (e) {
+    if (signal?.aborted || isAbortError(e)) throw e
+    console.error(`[generate:${requestId}] outline generation failed: ${errMsg(e).split('\n')[0]}`)
+    throw e
+  }
 }
 
 /** Per-section result plus a flag telling whether the content is a degraded placeholder. */
@@ -146,29 +200,30 @@ const PLACEHOLDER_DETAIL: SectionDetail = {
   ],
 }
 
-async function callSection(article: string, section: OutlineSection, outline: Outline, signal?: AbortSignal): Promise<SectionResult> {
+async function callSection(requestId: string, article: string, section: OutlineSection, outline: Outline, signal?: AbortSignal): Promise<SectionResult> {
   try {
     const { instructions, prompt } = buildSectionPrompt(article, section, outline)
-    const detail = await generateJson(`section "${section.title}"`, SectionDetailSchema, instructions, prompt, signal)
+    const detail = await generateJson(requestId, `section "${section.title}"`, SectionDetailSchema, instructions, prompt, signal)
     return { detail, degraded: false }
   } catch (e) {
     // Abort/timeout propagates so the pipeline can stop immediately on disconnect.
     if (signal?.aborted || isAbortError(e)) throw e
-    // Only degrade on model-output failures (ZodError). Transport/auth/network errors
-    // also degrade per-section, but the caller surfaces a top-level error if EVERY
+    // Only degrade on model-output failures (ZodError/ModelOutputError). Transport/auth/network
+    // errors also degrade per-section, but the caller surfaces a top-level error if EVERY
     // section failed — so a total outage is never silently dressed up as a course.
-    const isValidation = e instanceof ZodError
-    if (!isValidation) {
-      console.error(`[generate] section "${section.title}" failed (transport/auth):`, errMsg(e))
-    } else {
-      console.error(`[generate] section "${section.title}" failed validation, using placeholder:`, e)
+    const isValidation = e instanceof ZodError || e instanceof ModelOutputError
+    const reason = errMsg(e)
+    console.error(`[generate:${requestId}] section "${section.title}" failed (${isValidation ? 'validation' : 'transport/auth'}): ${reason}`)
+    if (e instanceof ZodError) {
+      console.error(`[generate:${requestId}] section "${section.title}" validation issues: ${summarizeZodIssues(e)}`)
     }
-    return { detail: PLACEHOLDER_DETAIL, degraded: true, reason: errMsg(e) }
+    return { detail: PLACEHOLDER_DETAIL, degraded: true, reason }
   }
 }
 
 /* ── Public entry: an async generator of GenEvent ──────────── */
 export async function* generate(article: string, requestSignal?: AbortSignal): AsyncGenerator<GenEvent> {
+  const requestId = randomUUID().slice(0, 8)
   const q = new AsyncQueue<GenEvent>()
   const aborted = () => !!requestSignal?.aborted
 
@@ -180,9 +235,10 @@ export async function* generate(article: string, requestSignal?: AbortSignal): A
         q.push({ type: 'error', message: '文章太短（少于 80 字），请粘贴更完整的内容。' })
         return
       }
+      console.info(`[generate:${requestId}] start: article ${clean.length} chars, mock=${config.mock}, concurrency=${config.concurrency}`)
 
       q.push({ type: 'outline' })
-      const outline: Outline = config.mock ? mockOutline(clean) : await callOutline(clean, requestSignal)
+      const outline: Outline = config.mock ? mockOutline(clean) : await callOutline(requestId, clean, requestSignal)
       if (aborted()) return
       const total = outline.sections.length
 
@@ -193,7 +249,7 @@ export async function* generate(article: string, requestSignal?: AbortSignal): A
         if (aborted()) return
         const result = config.mock
           ? ({ detail: mockSectionScreens(clean, i, total), degraded: false } satisfies SectionResult)
-          : await callSection(clean, s, outline, requestSignal)
+          : await callSection(requestId, clean, s, outline, requestSignal)
         if (aborted()) return
         const d = result.detail
         sections[i] = { id: s.id, title: s.title, subtitle: s.subtitle, takeaways: d.takeaways, screens: d.screens }
@@ -202,6 +258,7 @@ export async function* generate(article: string, requestSignal?: AbortSignal): A
         q.push({ type: 'section', index: completed, total, title: s.title })
       })
       if (aborted()) return
+      console.info(`[generate:${requestId}] sections done: ${completed}/${total}, ${degraded} degraded`)
 
       // Every section failed → almost certainly a systemic outage (bad key, model
       // name, network). Surface it instead of rendering an all-placeholder course.
@@ -227,7 +284,10 @@ export async function* generate(article: string, requestSignal?: AbortSignal): A
       q.push({ type: 'done', html })
     } catch (e) {
       // A disconnect/abort is expected — don't emit a misleading error event.
-      if (!aborted() && !isAbortError(e)) q.push({ type: 'error', message: errMsg(e) })
+      if (!aborted() && !isAbortError(e)) {
+        console.error(`[generate:${requestId}] pipeline failed: ${errMsg(e).split('\n')[0]}`)
+        q.push({ type: 'error', message: errMsg(e) })
+      }
     } finally {
       q.close()
     }
